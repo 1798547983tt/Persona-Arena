@@ -37,6 +37,7 @@
     --pa-t-slow: 420ms;
     /* 五个页签的"自色" */
     --pa-tab-stage: var(--pa-vermilion);
+    --pa-tab-plot: var(--pa-azure);
     --pa-tab-actors: var(--pa-gamboge);
     --pa-tab-salon: var(--pa-pine);
     --pa-tab-whisper: var(--pa-rouge);
@@ -68,6 +69,7 @@
     --pa-gamboge: #e6b04a;
     --pa-pine: #5fa585;
     --pa-rouge: #d9718f;
+    --pa-azure: #4f9fbf;                       /* 石青·剧情页 */
     --pa-ok: var(--pa-pine);
     --pa-warn: var(--pa-gamboge);
     --pa-bad: #d65a78;
@@ -108,6 +110,7 @@
     --pa-gamboge: #8f620c;   /* 比规范略深，保证作文字时对宣纸 ≥ 4.5:1 */
     --pa-pine: #3a7a5a;
     --pa-rouge: #b2486a;
+    --pa-azure: #2b6f8c;                       /* 石青·剧情页 */
     --pa-ok: var(--pa-pine);
     --pa-warn: var(--pa-gamboge);
     --pa-bad: #a3303f;
@@ -128,16 +131,18 @@
 
 /* 页签强调映射（panel.js 写 root.dataset.tab） */
 #persona-arena-root[data-tab="stage"]    { --pa-tab-accent: var(--pa-tab-stage); }
+#persona-arena-root[data-tab="plot"]     { --pa-tab-accent: var(--pa-tab-plot); }
 #persona-arena-root[data-tab="actors"]   { --pa-tab-accent: var(--pa-tab-actors); }
 #persona-arena-root[data-tab="salon"]    { --pa-tab-accent: var(--pa-tab-salon); }
 #persona-arena-root[data-tab="whisper"]  { --pa-tab-accent: var(--pa-tab-whisper); }
 #persona-arena-root[data-tab="settings"] { --pa-tab-accent: var(--pa-tab-settings); }
 /* 无 JS 回退：页签按钮各自自色（TABS 顺序固定） */
 .pa-tab:nth-child(1) { --pa-tab-self: var(--pa-tab-stage); }
-.pa-tab:nth-child(2) { --pa-tab-self: var(--pa-tab-actors); }
-.pa-tab:nth-child(3) { --pa-tab-self: var(--pa-tab-salon); }
-.pa-tab:nth-child(4) { --pa-tab-self: var(--pa-tab-whisper); }
-.pa-tab:nth-child(5) { --pa-tab-self: var(--pa-tab-settings); }
+.pa-tab:nth-child(2) { --pa-tab-self: var(--pa-tab-plot); }
+.pa-tab:nth-child(3) { --pa-tab-self: var(--pa-tab-actors); }
+.pa-tab:nth-child(4) { --pa-tab-self: var(--pa-tab-salon); }
+.pa-tab:nth-child(5) { --pa-tab-self: var(--pa-tab-whisper); }
+.pa-tab:nth-child(6) { --pa-tab-self: var(--pa-tab-settings); }
 
 /* --------------------------------------------------------------------------
    悬浮球（不随主题，永远夜帖配色）
@@ -1146,3 +1151,59 @@ body.no-blur .pa-window::before { mix-blend-mode: normal; }
 body.noShadows .pa-window, body.noShadows .pa-card, body.noShadows .pa-move, body.noShadows .pa-actor-card,
 body.noShadows .pa-orb-core, body.noShadows .pa-btn.primary, body.noShadows .pa-avatar, body.noShadows .pa-toggle-track,
 body.noShadows .pa-title-glyph { box-shadow: none !important; }
+
+
+/* --------------------------------------------------------------------------
+   剧情页 · 史官 · 能力 · 破限（新增）
+   -------------------------------------------------------------------------- */
+.pa-plot-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
+.pa-seg .pa-chip-btn.active { background: color-mix(in srgb, var(--pa-tab-accent) 18%, transparent); border-color: var(--pa-tab-accent); color: var(--pa-text); }
+.pa-newcanon { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--pa-hair); }
+.pa-file { padding: 7px 10px; }
+.pa-file::file-selector-button { margin-right: 10px; padding: 5px 10px; border-radius: var(--pa-radius-pill); border: 1px solid var(--pa-hair-strong); background: var(--pa-surface-2); color: var(--pa-text); font: 12px var(--pa-sans); cursor: pointer; }
+.pa-lore-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; margin: 8px 0; padding-right: 4px; }
+.pa-lore-item { display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: start; padding: 8px 10px; border: 1px solid var(--pa-hair); border-radius: var(--pa-radius-sm); background: var(--pa-input-bg); cursor: pointer; transition: border-color var(--pa-t-fast); }
+.pa-lore-item:hover { border-color: var(--pa-hair-strong); }
+.pa-lore-item.disabled { opacity: .6; }
+.pa-lore-item input { margin-top: 3px; accent-color: var(--pa-tab-accent); }
+.pa-lore-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px; }
+.pa-lore-main b { font-family: var(--pa-serif); letter-spacing: .04em; }
+.pa-lore-preview { font-size: 12px; color: var(--pa-text-muted); line-height: 1.5; }
+.pa-compass-controls { align-items: flex-end; gap: 14px; padding: 8px 0 2px; }
+.pa-compass-controls .pa-field { margin-bottom: 0; }
+.pa-compass-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); margin: 14px 0; }
+.pa-compass-card { position: relative; padding: 12px 14px 14px; border: 1px solid var(--pa-hair); border-left: 3px solid var(--pa-c, var(--pa-tab-accent)); border-radius: var(--pa-radius-sm); background: var(--pa-surface-2); font-size: 13.5px; line-height: 1.65; color: var(--pa-text-2); animation: pa-rise .35s var(--pa-ease) both; }
+.pa-compass-card ul, .pa-compass-card ol { margin: 0; padding-left: 18px; }
+.pa-compass-card li { margin: 4px 0; }
+.pa-compass-card li b { color: var(--pa-text); font-weight: 600; }
+.pa-compass-title { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font: 600 14px/1.2 var(--pa-serif); letter-spacing: .1em; color: var(--pa-c, var(--pa-tab-accent)); }
+.pa-compass-now { --pa-c: var(--pa-azure); }
+.pa-compass-inevitable { --pa-c: var(--pa-vermilion); }
+.pa-compass-deviated { --pa-c: var(--pa-gamboge); }
+.pa-compass-impossible { --pa-c: var(--pa-text-muted); }
+.pa-compass-impossible li { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--pa-text-muted) 60%, transparent); }
+.pa-compass-possible { --pa-c: var(--pa-pine); }
+.pa-compass-butterflies { --pa-c: var(--pa-rouge); }
+.pa-compass-beats { --pa-c: var(--pa-indigo-tint); }
+.pa-compass-guidance { --pa-c: var(--pa-gold); grid-column: 1 / -1; }
+.pa-compass-guidance textarea { margin-bottom: 8px; }
+.pa-chain { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.pa-chain-step { position: relative; padding: 2px 8px; border-radius: var(--pa-radius-pill); border: 1px solid color-mix(in srgb, var(--pa-rouge) 50%, transparent); font-size: 12px; color: var(--pa-text-2); }
+.pa-chain-step + .pa-chain-step::before { content: "→"; position: absolute; left: -12px; top: 1px; color: var(--pa-text-muted); }
+.pa-history-entry { margin-bottom: 10px; }
+.pa-chronicler-bar { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--pa-hair); border-radius: var(--pa-radius); background: var(--pa-surface-2); }
+.pa-chronicler-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.pa-log-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow: auto; }
+.pa-log-item { padding: 8px 10px; border-left: 2px solid var(--pa-gamboge); background: var(--pa-input-bg); border-radius: 0 var(--pa-radius-sm) var(--pa-radius-sm) 0; font-size: 13px; }
+.pa-log-changes { margin: 4px 0 0; padding-left: 16px; color: var(--pa-text-muted); font-size: 12px; }
+.pa-abilities, .pa-overlay { display: flex; flex-direction: column; gap: 10px; }
+.pa-ability-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pa-chip-x { margin-left: 4px; border: 0; background: transparent; color: var(--pa-text-muted); font-size: 13px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.pa-chip-x:hover { color: var(--pa-bad); }
+.pa-jb-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.pa-jb-entry { padding: 8px 10px; border: 1px solid var(--pa-hair); border-radius: var(--pa-radius-sm); background: var(--pa-input-bg); display: flex; flex-direction: column; gap: 6px; }
+.pa-jb-entry .pa-toggle-label { font-size: 13px; }
+@media (max-width: 720px) {
+    .pa-compass-controls { flex-direction: column; align-items: stretch; }
+    .pa-lore-list { max-height: 240px; }
+}

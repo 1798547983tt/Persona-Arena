@@ -1,6 +1,7 @@
 // 连接：把演员的 API 配置翻译成酒馆后端能懂的请求。见 docs/adr/0002、0003。
 
 import { getSettings, saveSettings } from './settings.js';
+import { withJailbreak } from './jailbreak.js';
 
 const OFFICIAL_URLS = Object.freeze({
     openai: 'https://api.openai.com/v1',
@@ -224,8 +225,9 @@ export function getProfile(id) {
 /**
  * 发送一次对话补全。返回 { content, reasoning }。stream 时通过 onToken(cumulativeText) 回调。
  */
-export async function sendChat(conn, messages, { maxTokens, temperature, signal, onToken } = {}) {
+export async function sendChat(conn, messages, { maxTokens, temperature, signal, onToken, noJailbreak = false } = {}) {
     const c = ctx();
+    messages = withJailbreak(messages, { skip: noJailbreak });
     const stream = !!conn.stream && typeof onToken === 'function';
     const max_tokens = Number(maxTokens ?? conn.maxTokens ?? 800);
     const temp = temperature ?? conn.temperature;
@@ -282,7 +284,7 @@ export async function testConnection(conn) {
     const { content } = await sendChat(
         { ...conn, stream: false },
         [{ role: 'user', content: '请只回复四个字：连接成功' }],
-        { maxTokens: 32 },
+        { maxTokens: 32, noJailbreak: true },
     );
     return String(content || '').trim().slice(0, 80);
 }

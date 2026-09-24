@@ -8,6 +8,11 @@ export const LIMITS = Object.freeze({
     salon: 200,
     whisper: 120,
     bonds: 24,
+    abilities: 16,
+    npcs: 30,
+    chronicleLog: 20,
+    compassHistory: 6,
+    overlayChars: 600,
 });
 
 function ctx() { return SillyTavern.getContext(); }
@@ -20,6 +25,24 @@ function emptyState() {
         salon: [],
         whispers: {},
         lastLore: null,
+        plot: emptyPlot(),
+        chronicleLog: [],
+        npcs: [],
+        chroniclerLastFloor: -1,
+    };
+}
+
+function emptyPlot() {
+    return {
+        canonId: '',
+        loreBook: '',
+        loreUids: [],
+        notes: '',
+        compass: null,
+        compassAt: null,
+        compassFloor: -1,
+        history: [],
+        guidanceOverride: '',
     };
 }
 
@@ -34,7 +57,16 @@ export function getState() {
     st.actorState ??= {};
     st.salon ??= [];
     st.whispers ??= {};
+    if (!st.plot || typeof st.plot !== 'object') st.plot = emptyPlot();
+    else for (const [k, v] of Object.entries(emptyPlot())) if (!(k in st.plot)) st.plot[k] = v;
+    st.chronicleLog ??= [];
+    st.npcs ??= [];
+    st.chroniclerLastFloor ??= -1;
     return st;
+}
+
+export function getPlot() {
+    return getState().plot;
 }
 
 let saveTimer = null;
@@ -64,12 +96,89 @@ export function getActorState(actorId) {
             chronicle: [],
             pendingInstruction: null,
             lastMove: '',
+            abilities: [],
+            overlay: {},
         };
     }
     const a = st.actorState[actorId];
     a.bonds ??= [];
     a.chronicle ??= [];
+    a.abilities ??= [];
+    a.overlay ??= {};
     return a;
+}
+
+const OVERLAY_FIELDS = ['personality', 'appearance', 'backstory', 'voice', 'bottomLines', 'goals'];
+
+/** 把史官给出的"本剧中的变化"追加到该演员的覆盖层（不改全局人设卡）。 */
+export function appendOverlay(actorId, field, text) {
+    if (!OVERLAY_FIELDS.includes(field)) return;
+    const t = String(text || '').trim();
+    if (!t) return;
+    const a = getActorState(actorId);
+    const cur = String(a.overlay[field] || '');
+    if (cur.includes(t)) return;
+    let next = cur ? `${cur}；${t}` : t;
+    if (next.length > LIMITS.overlayChars) next = next.slice(next.length - LIMITS.overlayChars);
+    a.overlay[field] = next;
+}
+
+export function applyAbilityUpdate(actorId, upd) {
+    if (!upd || typeof upd !== 'object') return;
+    const a = getActorState(actorId);
+    const norm = (x) => (typeof x === 'string' ? { name: x, note: '' } : { name: String(x?.name || '').trim(), note: String(x?.note || '').trim().slice(0, 80) });
+    for (const g of (Array.isArray(upd.gained) ? upd.gained : [])) {
+        const n = norm(g); if (!n.name) continue;
+        const ex = a.abilities.find(x => x.name === n.name);
+        if (ex) { if (n.note) ex.note = n.note; continue; }
+        if (a.abilities.length >= LIMITS.abilities) continue;
+        a.abilities.push({ name: n.name.slice(0, 24), note: n.note });
+    }
+    for (const c of (Array.isArray(upd.changed) ? upd.changed : [])) {
+        const n = norm(c); if (!n.name) continue;
+        const ex = a.abilities.find(x => x.name === n.name);
+        if (ex) ex.note = n.note || ex.note; else if (a.abilities.length < LIMITS.abilities) a.abilities.push({ name: n.name.slice(0, 24), note: n.note });
+    }
+    for (const l of (Array.isArray(upd.lost) ? upd.lost : [])) {
+        const name = typeof l === 'string' ? l : l?.name;
+        if (!name) continue;
+        a.abilities = a.abilities.filter(x => x.name !== name);
+    }
+}
+
+/** 快照/恢复全部演员面板（史官撤销用）。 */
+export function snapshotActorStates() {
+    const st = getState();
+    return structuredClone({ actorState: st.actorState, npcs: st.npcs });
+}
+
+export function restoreActorStates(snap) {
+    if (!snap) return;
+    const st = getState();
+    st.actorState = structuredClone(snap.actorState || {});
+    st.npcs = structuredClone(snap.npcs || []);
+    saveState();
+}
+
+export function pushChronicleLog(entry) {
+    const st = getState();
+    st.chronicleLog.push(entry);
+    if (st.chronicleLog.length > LIMITS.chronicleLog) st.chronicleLog.splice(0, st.chronicleLog.length - LIMITS.chronicleLog);
+    return entry;
+}
+
+export function upsertNpc(npc) {
+    const st = getState();
+    const name = String(npc?.name || '').trim();
+    if (!name) return;
+    let ex = st.npcs.find(n => n.name === name);
+    if (!ex) {
+        if (st.npcs.length >= LIMITS.npcs) return;
+        ex = { name, role: '', note: '' };
+        st.npcs.push(ex);
+    }
+    if (npc.role) ex.role = String(npc.role).slice(0, 40);
+    if (npc.note) ex.note = String(npc.note).slice(0, 160);
 }
 
 export function clampBond(v) {

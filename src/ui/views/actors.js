@@ -6,6 +6,8 @@ import { getActorState, saveState, clampBond } from '../../state.js';
 import { PERSONALITY_PRESETS, ORIGIN_LABELS } from '../../prompts.js';
 import { generateSheet, extractNpcSheet, sheetFromCharacter, listCharacters } from '../../search.js';
 import { ensureDefaultConnection } from '../../connections.js';
+import { recordFloor, undoLast, solidifyOverlay, clearOverlay, chroniclerBusy, onChroniclerChange, abortChronicler } from '../../chronicler.js';
+import { getState, LIMITS } from '../../state.js';
 
 const EMOJIS = ['🎭', '🗡️', '🌙', '🔥', '🌸', '🦊', '🐺', '🕊️', '⚔️', '🍶', '📜', '🌊', '🪶', '🎐', '🐉', '🧧'];
 const COLORS = ['#d4482f', '#b97f12', '#3a7a5a', '#3b62a3', '#7a5c9e', '#b2486a', '#2f7f8c', '#7a6f5e'];
@@ -56,9 +58,41 @@ export function renderActors(root, app, params = {}) {
         add(grid, addCard);
         add(root, 
             h('div', { class: 'pa-section-title' }, icon('user-astronaut'), ' 演员表', h('span', { class: 'pa-muted pa-small' }, `　${actors.filter(a => a.enabled).length}/${actors.length} 在场`)),
+            chroniclerBar(),
             actors.length ? null : h('div', { class: 'pa-empty pa-empty-poem' }, h('p', {}, '一个人也演不成戏。'), h('p', {}, '点「新演员」，可以手写人设、套用性格预设、从角色卡导入、从舞台提炼 NPC，或联网搜索同人角色一键生成。')),
             grid,
         );
+    }
+
+    // ---------- 史官栏 ----------
+    function chroniclerBar() {
+        const s = getSettings();
+        const st = getState();
+        const busy = chroniclerBusy();
+        const log = st.chronicleLog || [];
+        const last = log[log.length - 1];
+        const bar = h('div', { class: 'pa-chronicler-bar' },
+            h('div', { class: 'pa-chronicler-info' },
+                h('span', { class: `pa-chip ${s.chronicler.enabled ? 'pa-chip-ok' : ''}` }, icon('scroll'), s.chronicler.enabled ? ` 史官 · ${s.chronicler.trigger === 'all' ? '每楼' : s.chronicler.trigger === 'ai' ? '每条正文' : '手动'}` : ' 史官未开启'),
+                h('span', { class: 'pa-muted pa-small' }, last ? `上次：第 ${last.floor} 楼 · ${last.summary || '已记录'}` : '正文每出一楼，主 AI 会核对并更新演员的心情、目标、羁绊、能力与人设变化。'),
+            ),
+            h('div', { class: 'pa-row pa-wrap' },
+                busy ? button('中止', { icon: 'stop', kind: 'danger small', onClick: () => abortChronicler() }) : null,
+                button(busy ? '记录中…' : '记一笔', { icon: busy ? 'spinner fa-spin' : 'feather', kind: 'ghost small', disabled: busy, title: '让史官立刻核对最新一楼', onClick: async () => {
+                    try { const e = await recordFloor({ manual: true }); toast(e ? 'success' : 'info', e ? `已记录：${e.summary || '有更新'}` : '这一楼没有需要更新的地方'); } catch (err) { toast('error', err.message); }
+                } }),
+                last?.snapshot ? button('撤销上次', { icon: 'rotate-left', kind: 'ghost small', onClick: async () => { if (await confirmDialog('撤销记录', '恢复到上次记录之前的面板。')) { try { undoLast(); toast('info', '已撤销'); } catch (err) { toast('error', err.message); } } } }) : null,
+                button('设置', { icon: 'sliders', kind: 'ghost small', onClick: () => app.openTab('settings', { focus: 'chronicler' }) }),
+            ),
+        );
+        if (log.length) {
+            add(bar, collapsible(`史官日志（${log.length}）`, h('div', { class: 'pa-log-list' }, log.slice().reverse().map(e => h('div', { class: 'pa-log-item' },
+                h('div', { class: 'pa-kicker' }, `第 ${e.floor} 楼 · ${e.floorName || ''}`),
+                h('div', {}, e.summary || '（无摘要）'),
+                e.changes?.length ? h('ul', { class: 'pa-log-changes' }, e.changes.map(ch => h('li', {}, h('b', {}, ch.name), '：', ch.diff.join('，')))) : h('div', { class: 'pa-muted pa-small' }, '没有变化'),
+            )))));
+        }
+        return bar;
     }
 
     // ---------- 详情（面板） ----------
@@ -108,6 +142,48 @@ export function renderActors(root, app, params = {}) {
         }
         renderBonds();
 
+        const abilitiesEl = h('div', { class: 'pa-abilities' });
+        function renderAbilities() {
+            clear(abilitiesEl);
+            const base = String(a.sheet.abilities || '').split(/\n|；|;/).map(x => x.trim()).filter(Boolean);
+            if (base.length) add(abilitiesEl, h('div', { class: 'pa-ability-row' }, h('span', { class: 'pa-kicker' }, '人设自带'), base.map(x => h('span', { class: 'pa-chip' }, x))));
+            const dyn = st.abilities || [];
+            const row = h('div', { class: 'pa-ability-row' }, h('span', { class: 'pa-kicker' }, '本剧获得'));
+            if (!dyn.length) add(row, h('span', { class: 'pa-muted pa-small' }, '（暂无；史官会在正文里记录得失）'));
+            for (const ab of dyn) {
+                add(row, h('span', { class: 'pa-chip pa-chip-ok', title: ab.note || '' }, ab.name, ab.note ? h('span', { class: 'pa-muted' }, `·${ab.note}`) : null,
+                    h('button', { type: 'button', class: 'pa-chip-x', 'aria-label': '移除', onClick: () => { st.abilities = st.abilities.filter(x => x !== ab); saveState(); renderAbilities(); } }, '×')));
+            }
+            add(abilitiesEl, row, button('添加能力', { icon: 'plus', kind: 'ghost small', onClick: async () => {
+                const name = await promptDialog('添加能力', '能力 / 物品 / 身份的名字');
+                if (!name) return;
+                if ((st.abilities || []).length >= LIMITS.abilities) { toast('warning', '能力太多了'); return; }
+                st.abilities.push({ name: name.trim().slice(0, 24), note: '' }); saveState(); renderAbilities();
+            } }));
+        }
+        renderAbilities();
+
+        const overlayEl = h('div', { class: 'pa-overlay' });
+        const OVERLAY_LABELS = { personality: '性格', appearance: '外貌', backstory: '经历', voice: '口吻', bottomLines: '底线', goals: '目标' };
+        function renderOverlay() {
+            clear(overlayEl);
+            const o = st.overlay || {};
+            const rows = Object.entries(OVERLAY_LABELS).filter(([k]) => String(o[k] || '').trim());
+            if (!rows.length) add(overlayEl, h('div', { class: 'pa-muted pa-small' }, '史官记录的人设变化会出现在这里（只影响本聊天，不改全局人设卡）。'));
+            for (const [k, label] of rows) {
+                const ta = textarea({ value: o[k], rows: 2 });
+                ta.addEventListener('change', () => { st.overlay[k] = ta.value.trim(); saveState(); });
+                add(overlayEl, field(label, ta));
+            }
+            if (rows.length || (st.abilities || []).length) {
+                add(overlayEl, h('div', { class: 'pa-row pa-wrap' },
+                    button('固化到人设卡', { icon: 'stamp', kind: 'ghost small', title: '把这些变化写进全局人设卡，以后所有聊天都生效', onClick: async () => { if (await confirmDialog('固化变化', '把本剧的人设变化与获得的能力写进全局人设卡？') ) { try { const n = solidifyOverlay(a.id); toast('success', `已固化 ${n} 项`); rerender(); } catch (err) { toast('error', err.message); } } } }),
+                    rows.length ? button('清除变化', { icon: 'eraser', kind: 'ghost small', onClick: async () => { if (await confirmDialog('清除变化', '清除本剧中记录的人设变化（不影响能力）。')) { clearOverlay(a.id); renderOverlay(); } } }) : null,
+                ));
+            }
+        }
+        renderOverlay();
+
         const chronicleEl = h('div', { class: 'pa-chronicle' });
         function renderChronicle() {
             clear(chronicleEl);
@@ -125,6 +201,8 @@ export function renderActors(root, app, params = {}) {
                     st.pendingInstruction ? h('div', { class: 'pa-pending' }, icon('bolt'), h('span', {}, '待执行指令：', st.pendingInstruction.text)) : null,
                     st.lastMove ? h('div', {}, h('div', { class: 'pa-kicker' }, '上一手'), renderRich(st.lastMove)) : null),
                 h('section', { class: 'pa-card' }, h('div', { class: 'pa-section-title' }, icon('link'), ' 羁绊'), bondsEl),
+                h('section', { class: 'pa-card' }, h('div', { class: 'pa-section-title' }, icon('bolt'), ' 能力'), abilitiesEl),
+                h('section', { class: 'pa-card' }, h('div', { class: 'pa-section-title' }, icon('wand-sparkles'), ' 本剧中的变化'), overlayEl),
                 h('section', { class: 'pa-card pa-card-wide' }, h('div', { class: 'pa-section-title' }, icon('book-open'), ' 经历簿'), chronicleEl),
                 h('section', { class: 'pa-card pa-card-wide' }, h('div', { class: 'pa-section-title' }, icon('id-card'), ' 人设卡'),
                     sheetView(a)),
@@ -137,7 +215,7 @@ export function renderActors(root, app, params = {}) {
         const preset = PERSONALITY_PRESETS.find(p => p.id === s.presetId);
         const rows = [
             ['性格底色', preset ? `${preset.name} — ${preset.text}` : ''],
-            ['性格', s.personality], ['外貌', s.appearance], ['经历', s.backstory], ['口吻', s.voice], ['底线', s.bottomLines || preset?.bottomLines || ''], ['目标', s.goals],
+            ['性格', s.personality], ['外貌', s.appearance], ['经历', s.backstory], ['口吻', s.voice], ['底线', s.bottomLines || preset?.bottomLines || ''], ['目标', s.goals], ['能力', s.abilities],
         ].filter(r => r[1]);
         if (!rows.length) return h('div', { class: 'pa-muted pa-small' }, '人设卡还是空白的。');
         return h('dl', { class: 'pa-sheet' }, rows.map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
@@ -173,11 +251,12 @@ export function renderActors(root, app, params = {}) {
         const voiceF = mk('voice', '口吻与习惯', 2, '口癖、称呼、语速、爱用的比喻');
         const bottomF = mk('bottomLines', '底线（绝不做的事）', 2, '玩家的指令碰到这里会被拒绝');
         const goalsF = mk('goals', '长期目标', 2, '');
+        const abilitiesF = mk('abilities', '能力 / 物品 / 身份（一行一条）', 3, '例如：\n剑术·入门\n一把祖传短刀\n镇上药铺的学徒');
         const overrideT = textarea({ value: a.promptOverride, rows: 6, placeholder: '留空则使用内置的行动提示词。可用 {{name}}、{{max}}。' });
         overrideT.addEventListener('input', () => { a.promptOverride = overrideT.value; });
 
         function applySheet(sheet) {
-            for (const k of ['personality', 'appearance', 'backstory', 'voice', 'bottomLines', 'goals']) { if (sheet[k]) { a.sheet[k] = sheet[k]; tas[k].value = sheet[k]; } }
+            for (const k of ['personality', 'appearance', 'backstory', 'voice', 'bottomLines', 'goals', 'abilities']) { if (sheet[k] && tas[k]) { a.sheet[k] = sheet[k]; tas[k].value = sheet[k]; } }
             if (sheet.emoji && EMOJIS.includes(sheet.emoji)) { a.emoji = sheet.emoji; [...emojiRow.children].forEach(c => c.classList.toggle('active', c.textContent === sheet.emoji)); }
         }
 
@@ -243,7 +322,7 @@ export function renderActors(root, app, params = {}) {
                 ),
                 h('section', { class: 'pa-card pa-card-wide' },
                     h('div', { class: 'pa-section-title' }, icon('feather'), ' 人设卡'),
-                    personalityF, appearanceF, backstoryF, voiceF, bottomF, goalsF,
+                    personalityF, appearanceF, backstoryF, voiceF, bottomF, goalsF, abilitiesF,
                     collapsible('高级：自定义行动提示词', field('完全替换内置提示词', overrideT)),
                 ),
             ),
@@ -252,4 +331,6 @@ export function renderActors(root, app, params = {}) {
     }
 
     rerender();
+    const off = onChroniclerChange((d) => { if (d.started || d.finished || d.entry || d.undone || d.solidified) rerender(); });
+    return () => off();
 }

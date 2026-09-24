@@ -6,6 +6,7 @@ import { collectStage, sendToStage, copyText, putInInput } from './stage.js';
 import { buildMoveMessages, buildSalonDigest } from './prompts.js';
 import { generateFor, parseMove, truncateMove, describeError } from './llm.js';
 import { uid } from './settings.js';
+import { plotFeedForActors } from './plot.js';
 
 const listeners = new Set();
 let running = null;   // { round, controller }
@@ -51,6 +52,7 @@ async function runMove(round, move, actor, stage, priorMoves, signal) {
         actor, state: actorState, stage, priorMoves, settings,
         salonDigest: settings.includeSalonDigest ? buildSalonDigest(st.salon) : '',
         pendingInstruction: pending,
+        plotFeed: plotFeedForActors(),
     });
     move.status = 'running';
     move.error = '';

@@ -38,6 +38,7 @@ export const DEFAULT_ACTOR = Object.freeze({
         voice: '',
         bottomLines: '',
         goals: '',
+        abilities: '',        // 能力（一行一条）
     },
     promptOverride: '',       // 高级：完全替换行动系统提示
 });
@@ -73,6 +74,32 @@ export const DEFAULT_SETTINGS = Object.freeze({
         orbVisible: true,
         fontScale: 1,
     },
+    jailbreak: {
+        enabled: false,       // 玩家自己开关
+        source: 'bundled',    // bundled | custom
+        bundledOn: {},        // 内置条目开关覆盖 { id: bool }
+        custom: [],           // 从自己预设提取的条目 [{ id, name, content, on }]
+        customName: '',
+    },
+    plot: {
+        autoEveryFloors: 0,   // 0 = 手动；N = 每 N 层自动推演
+        injectEnabled: true,  // 把罗盘引导注入正文提示词
+        injectDepth: 1,
+        injectRole: 0,        // 0 system / 1 user / 2 assistant
+        feedActors: true,     // 演员行动时也能看到走向
+        chunkChars: 6000,
+        digestMaxChars: 5000,
+        connectionId: '',     // 空 = 工坊连接
+    },
+    chronicler: {
+        enabled: false,
+        connectionId: '',     // 主 AI（史官）用哪套连接；空 = 工坊连接
+        trigger: 'ai',        // ai | all | manual
+        minChars: 40,
+        fields: { mood: true, goal: true, bonds: true, chronicle: true, sheet: true, abilities: true, npcs: true },
+        maxLog: 20,
+    },
+    canons: [],               // 原著摘要 [{ id, name, sourceType, digest, chapters, chars, createdAt }]
     connections: [],
     actors: [],
 });
@@ -165,6 +192,25 @@ export function moveActor(id, delta) {
     if (idx < 0 || target < 0 || target >= s.actors.length) return;
     const [a] = s.actors.splice(idx, 1);
     s.actors.splice(target, 0, a);
+    saveSettings();
+}
+
+export function getCanon(id) {
+    return getSettings().canons.find(c => c.id === id) || null;
+}
+
+export function upsertCanon(canon) {
+    const s = getSettings();
+    if (!canon.id) canon.id = uid('canon');
+    const idx = s.canons.findIndex(c => c.id === canon.id);
+    if (idx >= 0) s.canons[idx] = canon; else s.canons.push(canon);
+    saveSettings();
+    return canon;
+}
+
+export function removeCanon(id) {
+    const s = getSettings();
+    s.canons = s.canons.filter(c => c.id !== id);
     saveSettings();
 }
 

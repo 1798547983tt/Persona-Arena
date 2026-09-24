@@ -9,6 +9,8 @@ import { createPanel } from './src/ui/panel.js';
 import { onRoundChange, startRound, isRunning } from './src/rounds.js';
 import { onSocialChange, isSocialBusy } from './src/social.js';
 import { activeActors } from './src/state.js';
+import { scheduleRecord } from './src/chronicler.js';
+import { applyInjection, onFloorRendered } from './src/plot.js';
 import { h, icon, toast } from './src/ui/dom.js';
 
 const RUNTIME_KEY = '__PERSONA_ARENA_RUNTIME__';
@@ -39,10 +41,10 @@ function addSlashCommands(panel) {
             callback: (_named, unnamed) => {
                 const tab = String(unnamed || '').trim();
                 if (tab === 'close') { panel.close(); return ''; }
-                panel.open(['stage', 'actors', 'salon', 'whisper', 'settings'].includes(tab) ? tab : undefined);
+                panel.open(['stage', 'plot', 'actors', 'salon', 'whisper', 'settings'].includes(tab) ? tab : undefined);
                 return '';
             },
-            unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '页签：stage / actors / salon / whisper / settings / close', typeList: [ARGUMENT_TYPE.STRING], isRequired: false })],
+            unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '页签：stage / plot / actors / salon / whisper / settings / close', typeList: [ARGUMENT_TYPE.STRING], isRequired: false })],
             helpString: '打开人格竞技场面板。',
         }));
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
@@ -71,7 +73,7 @@ function addSettingsDrawer(panel) {
             h('div', { class: 'inline-drawer-toggle inline-drawer-header' }, h('b', {}, 'Persona Arena · 人格竞技场'), h('div', { class: 'inline-drawer-icon fa-solid fa-circle-chevron-down down' })),
             h('div', { class: 'inline-drawer-content' },
                 h('div', { class: 'flex-container flexGap10 alignItemsCenter' }, openBtn, h('label', { class: 'checkbox_label', for: 'persona-arena-orb-toggle' }, orbToggle, h('span', {}, '显示悬浮球'))),
-                h('small', {}, '所有设置都在竞技场面板的「设置」页里。斜杠命令：/arena、/arena-round。'),
+                h('small', {}, '所有设置都在竞技场面板的「设置」页里。斜杠命令：/arena [stage|plot|actors|salon|whisper|settings]、/arena-round。'),
             ),
         ),
     ));
@@ -105,17 +107,28 @@ function init() {
 
     // 酒馆事件
     const { eventSource, event_types } = ctx();
-    const onChatChanged = () => { refreshOrb(); if (panel.isOpen) panel.refresh(); };
-    const onMessageRendered = () => {
+    const onChatChanged = () => { refreshOrb(); applyInjection(); if (panel.isOpen) panel.refresh(); };
+    const onMessageRendered = (messageId) => {
         refreshOrb();
         const s = getSettings();
+        try { scheduleRecord(Number(messageId)); } catch (err) { console.warn('[PersonaArena] chronicler schedule failed', err); }
+        try { onFloorRendered(); } catch (err) { console.warn('[PersonaArena] plot auto failed', err); }
         if (s.autoRoundOnReply && !isRunning() && activeActors().length && !panel.isOpen) {
             startRound().catch(err => toast('error', err.message));
         }
     };
+    const onUserRendered = (messageId) => {
+        try { scheduleRecord(Number(messageId), { isUser: true }); } catch { /* 忽略 */ }
+    };
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onMessageRendered);
-    disposers.push(() => { eventSource.removeListener(event_types.CHAT_CHANGED, onChatChanged); eventSource.removeListener(event_types.CHARACTER_MESSAGE_RENDERED, onMessageRendered); });
+    eventSource.on(event_types.USER_MESSAGE_RENDERED, onUserRendered);
+    disposers.push(() => {
+        eventSource.removeListener(event_types.CHAT_CHANGED, onChatChanged);
+        eventSource.removeListener(event_types.CHARACTER_MESSAGE_RENDERED, onMessageRendered);
+        eventSource.removeListener(event_types.USER_MESSAGE_RENDERED, onUserRendered);
+    });
+    applyInjection();
 
     // 魔棒菜单在某些版本会被重建，切聊天后补一次
     eventSource.on(event_types.CHAT_CHANGED, () => { if (!document.getElementById('persona-arena-wand')) disposers.push(addWandEntry(panel)); });

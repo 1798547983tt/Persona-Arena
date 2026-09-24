@@ -3,6 +3,7 @@
 import { h, add, clear, icon } from './dom.js';
 import { getSettings } from '../settings.js';
 import { renderStage } from './views/stage.js';
+import { renderPlot } from './views/plot.js';
 import { renderActors } from './views/actors.js';
 import { renderSalon } from './views/salon.js';
 import { renderWhisper } from './views/whisper.js';
@@ -11,6 +12,7 @@ import { markTab } from './motion.js';
 
 const TABS = [
     { id: 'stage', label: '舞台', icon: 'masks-theater', render: renderStage },
+    { id: 'plot', label: '剧情', icon: 'compass', render: renderPlot },
     { id: 'actors', label: '演员', icon: 'user-astronaut', render: renderActors },
     { id: 'salon', label: '沙龙', icon: 'mug-hot', render: renderSalon },
     { id: 'whisper', label: '私语', icon: 'feather-pointed', render: renderWhisper },

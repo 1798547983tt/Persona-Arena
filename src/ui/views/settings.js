@@ -4,6 +4,7 @@ import { h, add, clear, button, icon, toggle, toast, input, textarea, select, fi
 import { getSettings, saveSettings, upsertConnection, removeConnection, DEFAULT_CONNECTION, uid, exportSettings, importSettings } from '../../settings.js';
 import { PROVIDERS, listModels, storeKey, deleteStoredKey, listStoredKeys, listProfiles, requiresInlineKey, needsKey, testConnection, CLAUDE_MODELS } from '../../connections.js';
 import { resetState } from '../../state.js';
+import { listJailbreakEntries, setJailbreakEntryOn, importJailbreakPreset, useBundledJailbreak, bundledPresetName, buildJailbreakText } from '../../jailbreak.js';
 
 export function renderSettings(root, app, params = {}) {
     const s = getSettings();
@@ -219,6 +220,75 @@ export function renderSettings(root, app, params = {}) {
         field('工坊连接', wsSel, '生成人设、提炼 NPC 时用哪套连接。'),
     );
 
+    // ---------- 史官 ----------
+    const chronConnSel = select([{ value: '', label: '（工坊连接 / 默认）' }, ...s.connections.map(c => ({ value: c.id, label: c.name }))], { value: s.chronicler.connectionId });
+    chronConnSel.addEventListener('change', () => { s.chronicler.connectionId = chronConnSel.value; saveSettings(); });
+    const chronTrig = select([{ value: 'ai', label: '每条正文（AI 楼层）' }, { value: 'all', label: '每一楼（含玩家发言）' }, { value: 'manual', label: '只手动' }], { value: s.chronicler.trigger });
+    chronTrig.addEventListener('change', () => { s.chronicler.trigger = chronTrig.value; saveSettings(); });
+    const chronMin = input({ type: 'number', min: 0, max: 2000, value: s.chronicler.minChars, class: 'pa-input pa-input-num' });
+    chronMin.addEventListener('change', () => { s.chronicler.minChars = Math.max(0, Number(chronMin.value) || 0); saveSettings(); });
+    const FIELD_LABELS = { mood: '心情', goal: '目标', bonds: '羁绊', chronicle: '经历簿', sheet: '人设变化', abilities: '能力', npcs: 'NPC 名册' };
+    const chroniclerSection = h('section', { class: 'pa-card', id: 'pa-settings-chronicler' },
+        h('div', { class: 'pa-section-title' }, icon('scroll'), ' 史官（主 AI 动态更新）'),
+        toggle(s.chronicler.enabled, (v) => { s.chronicler.enabled = v; saveSettings(); }, '启用：正文每出一楼，让主 AI 更新演员数据'),
+        field('史官用哪套连接', chronConnSel, '建议用一个便宜、听话、擅长 JSON 的模型。'),
+        field('触发时机', chronTrig),
+        field('楼层最少字数', chronMin, '太短的楼层（如"嗯"）不记。'),
+        h('div', { class: 'pa-kicker' }, '允许更新'),
+        h('div', { class: 'pa-row pa-wrap' }, Object.entries(FIELD_LABELS).map(([k, label]) => toggle(s.chronicler.fields[k] !== false, (v) => { s.chronicler.fields[k] = v; saveSettings(); }, label))),
+        h('div', { class: 'pa-field-hint' }, '人设变化只写进本聊天的"本剧中的变化"，不动全局人设卡；在演员详情里可以固化或清除，也可以撤销最近一次记录。'),
+    );
+
+    // ---------- 破限 ----------
+    const jbSection = h('section', { class: 'pa-card', id: 'pa-settings-jailbreak' });
+    function renderJailbreak() {
+        clear(jbSection);
+        const jb = s.jailbreak;
+        const entries = listJailbreakEntries();
+        add(jbSection,
+            h('div', { class: 'pa-section-title' }, icon('unlock-keyhole'), ' 破限提示词'),
+            toggle(jb.enabled, (v) => { jb.enabled = v; saveSettings(); renderJailbreak(); }, '启用：作为所有插件调用的最顶端 system 提示'),
+            h('div', { class: 'pa-field-hint' }, `来源：${jb.source === 'custom' ? `自定义预设「${jb.customName || '未命名'}」` : `内置预设「${bundledPresetName()}」`}。只取预设里「破限」区的条目；输出格式契约不受影响（会附一句桥接说明）。`),
+        );
+        const list = h('div', { class: 'pa-jb-list' });
+        for (const e of entries) {
+            add(list, h('div', { class: 'pa-jb-entry' },
+                toggle(e.on, (v) => { setJailbreakEntryOn(e.id, v); }, e.name),
+                collapsible(`查看内容（${e.content.length} 字）`, h('pre', { class: 'pa-dispatch-preview' }, e.content)),
+            ));
+        }
+        add(jbSection, list,
+            h('div', { class: 'pa-row pa-wrap' },
+                button('导入自己的预设 JSON', { icon: 'file-import', kind: 'ghost small', onClick: () => {
+                    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/json,.json';
+                    inp.addEventListener('change', async () => {
+                        const f = inp.files?.[0]; if (!f) return;
+                        try { const n = importJailbreakPreset(JSON.parse(await f.text()), f.name.replace(/\.json$/i, '')); toast('success', `已提取 ${n.length} 条破限条目`); renderJailbreak(); }
+                        catch (err) { toast('error', err.message); }
+                    });
+                    inp.click();
+                } }),
+                jb.source === 'custom' ? button('改回内置预设', { kind: 'ghost small', onClick: () => { useBundledJailbreak(); renderJailbreak(); } }) : null,
+            ),
+            jb.enabled ? collapsible('实际发出的最顶端 system 文本', h('pre', { class: 'pa-dispatch-preview' }, buildJailbreakText() || '（没有启用的条目）')) : null,
+        );
+    }
+    renderJailbreak();
+
+    // ---------- 剧情顾问 ----------
+    const plotConnSel = select([{ value: '', label: '（工坊连接 / 默认）' }, ...s.connections.map(c => ({ value: c.id, label: c.name }))], { value: s.plot.connectionId });
+    plotConnSel.addEventListener('change', () => { s.plot.connectionId = plotConnSel.value; saveSettings(); });
+    const chunkIn = input({ type: 'number', min: 1500, max: 20000, step: 500, value: s.plot.chunkChars, class: 'pa-input pa-input-num' });
+    chunkIn.addEventListener('change', () => { s.plot.chunkChars = Math.max(1500, Number(chunkIn.value) || 6000); saveSettings(); });
+    const digestIn = input({ type: 'number', min: 1500, max: 12000, step: 500, value: s.plot.digestMaxChars, class: 'pa-input pa-input-num' });
+    digestIn.addEventListener('change', () => { s.plot.digestMaxChars = Math.max(1500, Number(digestIn.value) || 5000); saveSettings(); });
+    const plotSection = h('section', { class: 'pa-card' },
+        h('div', { class: 'pa-section-title' }, icon('compass'), ' 剧情顾问'),
+        field('推演与总结用哪套连接', plotConnSel, '长篇总结建议用大上下文、便宜的模型。'),
+        h('div', { class: 'pa-row pa-wrap' }, field('每段提要字数', chunkIn), field('梗概字数上限', digestIn)),
+        h('div', { class: 'pa-field-hint' }, '自动推演频率、注入深度等在「剧情」页里设置。'),
+    );
+
     // ---------- 外观 ----------
     const themeSel = select([{ value: 'ink', label: '夜帖（深色）' }, { value: 'paper', label: '宣纸（浅色）' }], { value: s.ui.theme });
     themeSel.addEventListener('change', () => { s.ui.theme = themeSel.value; saveSettings(); app.applyTheme(); });
@@ -250,11 +320,14 @@ export function renderSettings(root, app, params = {}) {
             } }),
             button('清空本聊天的竞技场记录', { icon: 'broom', kind: 'danger small', onClick: async () => { if (await confirmDialog('清空记录', '清空本聊天的回合、面板、沙龙、私语。演员与连接保留。')) { resetState(); toast('info', '已清空'); } } }),
         ),
-        h('div', { class: 'pa-field-hint' }, '导出文件不包含明文密钥。演员面板、沙龙、私语记录随聊天文件保存，不在导出内。'),
+        h('div', { class: 'pa-field-hint' }, '导出文件不包含明文密钥。演员面板、沙龙、私语、罗盘、史官日志随聊天文件保存，不在导出内；原著梗概随设置导出。'),
     );
 
     add(root, 
-        h('div', { class: 'pa-settings-grid' }, connSection, roundSection, dispatchSection, searchSection, uiSection, dataSection),
+        h('div', { class: 'pa-settings-grid' }, connSection, roundSection, chroniclerSection, jbSection, plotSection, dispatchSection, searchSection, uiSection, dataSection),
     );
     renderConnections();
+    if (params.focus) {
+        setTimeout(() => document.getElementById(`pa-settings-${params.focus}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    }
 }

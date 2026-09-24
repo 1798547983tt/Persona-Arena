@@ -23,7 +23,7 @@ export const ORIGIN_LABELS = Object.freeze({
     crossover: '魂穿 · 同人',
 });
 
-function sheetText(actor) {
+function sheetText(actor, state = null) {
     const s = actor.sheet || {};
     const preset = presetById(s.presetId);
     const lines = [];
@@ -39,7 +39,28 @@ function sheetText(actor) {
     const bottom = [s.bottomLines, preset && !s.bottomLines ? preset.bottomLines : ''].filter(Boolean).join(' ');
     if (bottom) lines.push(`底线（绝不做的事）：${bottom}`);
     if (s.goals) lines.push(`长期目标：${s.goals}`);
+    const abilities = abilitiesText(actor, state);
+    if (abilities) lines.push(`能力：${abilities}`);
+    const overlay = overlayText(state);
+    if (overlay) lines.push(`【本剧中已发生的变化（以此为准，覆盖上文冲突之处）】\n${overlay}`);
     return lines.join('\n');
+}
+
+const OVERLAY_LABELS = { personality: '性格', appearance: '外貌', backstory: '经历', voice: '口吻', bottomLines: '底线', goals: '目标' };
+
+export function overlayText(state) {
+    const o = state?.overlay || {};
+    return Object.entries(OVERLAY_LABELS)
+        .filter(([k]) => String(o[k] || '').trim())
+        .map(([k, label]) => `- ${label}：${String(o[k]).trim()}`)
+        .join('\n');
+}
+
+export function abilitiesText(actor, state) {
+    const base = String(actor?.sheet?.abilities || '').split(/\n|；|;/).map(x => x.trim()).filter(Boolean);
+    const dyn = (state?.abilities || []).map(a => a.note ? `${a.name}（${a.note}）` : a.name);
+    const all = [...base, ...dyn];
+    return all.length ? all.join('、') : '';
 }
 
 function bondsText(state, threshold) {
@@ -106,18 +127,21 @@ const MOVE_RULES = `你是一名演员，正在一场多人即兴剧里扮演上
 </state>
 bonds 只写这一回合有变化的对象；没有变化就给空数组。<state> 里必须是合法 JSON。`;
 
-export function buildMoveMessages({ actor, state, stage, priorMoves, settings, salonDigest, pendingInstruction }) {
+export function buildMoveMessages({ actor, state, stage, priorMoves, settings, salonDigest, pendingInstruction, plotFeed }) {
     const threshold = settings.bondImportantThreshold ?? 60;
     const sys = actor.promptOverride?.trim()
         ? actor.promptOverride.replace(/\{\{name\}\}/g, actor.name).replace(/\{\{max\}\}/g, String(settings.moveMaxChars))
         : [
-            `【人设卡】\n${sheetText(actor)}`,
+            `【人设卡】\n${sheetText(actor, state)}`,
             `【面板】\n${panelText(actor, state, threshold)}`,
             pendingInstruction ? `【已接受的玩家指令】\n${pendingInstruction}` : '',
             MOVE_RULES.replace(/\{\{name\}\}/g, actor.name).replace(/\{\{max\}\}/g, String(settings.moveMaxChars)),
         ].filter(Boolean).join('\n\n');
 
     const userParts = [stageText(stage, settings)];
+    if (plotFeed) {
+        userParts.push(`【剧情走向（导演的意图，仅供你把握分寸；不要在行动里点明或复述）】\n${plotFeed}`);
+    }
     if (settings.includeSalonDigest && salonDigest) {
         userParts.push(`【幕后沙龙里大家最近说的话（故事外，仅供参考，不要在行动里提及）】\n${salonDigest}`);
     }
@@ -146,7 +170,7 @@ const SALON_RULES = `这里是故事外的演员休息室（沙龙）。在场�
 export function buildSalonMessages({ actor, state, stage, salon, actors, settings, mentioned }) {
     const roster = actors.map(a => a.name).join('、');
     const sys = [
-        `【人设卡】\n${sheetText(actor)}`,
+        `【人设卡】\n${sheetText(actor, state)}`,
         `【面板】\n${panelText(actor, state, settings.bondImportantThreshold)}`,
         `在场演员：${roster}。玩家是导演。`,
         SALON_RULES,
@@ -178,7 +202,7 @@ const WHISPER_RULES = `这是玩家（导演）与你之间的私聊，故事里
 
 export function buildWhisperMessages({ actor, state, history, text, asInstruction, settings, stage }) {
     const sys = [
-        `【人设卡】\n${sheetText(actor)}`,
+        `【人设卡】\n${sheetText(actor, state)}`,
         `【面板】\n${panelText(actor, state, settings.bondImportantThreshold)}`,
         WHISPER_RULES,
     ].join('\n\n');
@@ -229,4 +253,86 @@ export function buildSalonDigest(salon, n = 8) {
     const list = (salon || []).slice(-n);
     if (!list.length) return '';
     return list.map(m => `${m.fromName}：${m.text}`).join('\n');
+}
+
+
+// ---------- 剧情罗盘 ----------
+
+export function buildChunkSummaryMessages({ name, index, total, chunk, prevSummary }) {
+    const sys = `你是小说编辑，正在为《${name}》做逐段剧情提要，供后续汇总成"原著梗概"。要求：只写这一段里发生的事实——人物、事件、因果、关系变化、埋下的伏笔、揭示的设定；按发生顺序写；不评论、不抒情；300 到 500 字；用中文。`;
+    const user = [
+        prevSummary ? `【上一段的提要（仅供衔接，不要重复）】\n${prevSummary}` : '',
+        `【第 ${index}/${total} 段原文】\n${chunk}`,
+        '写这一段的提要。',
+    ].filter(Boolean).join('\n\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+export function buildDigestMessages({ name, summaries, maxChars }) {
+    const sys = `你是小说编辑，要把《${name}》的逐段提要汇总成一份"原著梗概"，供另一个 AI 判断故事走向用。用 Markdown，严格按以下小节输出，总长不超过 ${maxChars} 字：
+## 一句话概括
+## 主线梗概（按时间顺序，分阶段）
+## 主要人物（名字：身份、动机、与他人的关系、结局或去向）
+## 关键转折点（编号，每条一句：事件 → 后果）
+## 世界规则与设定（力量体系、势力、地理、禁忌）
+## 伏笔与未解之谜
+## 原著的必然逻辑（哪些事在原著逻辑下"必然"发生，为什么）
+只写原著里有的事实，不臆造。`;
+    const user = `【逐段提要】\n${summaries}\n\n输出梗概。`;
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+export function buildMergeSummariesMessages({ name, part, total, summaries }) {
+    const sys = `你是小说编辑。把《${name}》第 ${part}/${total} 批逐段提要压缩成一份连贯的阶段提要：保留全部人物、事件、因果与伏笔，去掉重复与废话，按时间顺序，不超过 1200 字。`;
+    return [{ role: 'system', content: sys }, { role: 'user', content: summaries }];
+}
+
+export const COMPASS_SCHEMA_TEXT = `{"now":"当前局势，2-3句","position":"对应原著进度或章节；没有原著则写\"无原著，自由剧情\"","inevitable":["在现有逻辑下必然会发生的事（写清为什么必然）"],"deviated":[{"what":"已脱离原著之处","cause":"因为什么改变","consequence":"由此带来的后果"}],"impossible":["原著里有、但现在已不可能再发生的事（写原因）"],"possible":[{"what":"可能发生的事","chance":"高|中|低","trigger":"触发条件"}],"butterflies":[{"origin":"起点：一件看似很小的变化","chain":["连锁反应1","连锁反应2"],"outcome":"最终影响"}],"beats":["接下来第一个节拍","第二个节拍","第三个节拍"],"guidance":"给正文 AI 的引导：3-5 句，说明该把故事往哪推、哪些事该自然发生、哪些不要写、节奏如何"}`;
+
+export function buildCompassMessages({ canonName, canonDigest, loreText, stage, notes, previous, actorsBrief, npcsBrief }) {
+    const sys = `你是这部互动故事的剧情顾问（不是作者）。你的工作是根据原著梗概、世界设定、故事至今的记录与导演备注，推演剧情走向：什么必然发生、什么已经脱离原著、什么已不可能、什么可能、以及蝴蝶效应。判断要严谨：
+- "必然"只写因果链已经闭合、除非外力否则一定发生的事；
+- "脱离原著"要指出是哪个变化造成的、后果是什么；
+- "不可能"要说明原著里的前提在这里为何已不成立；
+- 蝴蝶效应从一件已经发生的小事出发，写清连锁；
+- 引导（guidance）写给正文 AI 看：具体、可执行、不剧透式地点明，尊重人物动机与已成立的事实。
+${canonDigest ? '有原著时，以原著逻辑为基准；' : '没有原著时，以故事内已成立的事实、人物动机与世界规则为基准；'}导演备注优先级最高。
+只输出一个 JSON 对象（不要代码块、不要前后缀），字段与含义：${COMPASS_SCHEMA_TEXT}
+所有值用中文。`;
+    const user = [
+        canonDigest ? `【原著梗概：《${canonName || '原著'}》】\n${canonDigest}` : '【原著】无。这是自由剧情。',
+        loreText ? `【世界书 / 设定】\n${loreText}` : '',
+        actorsBrief ? `【竞技场演员（插件控制的角色）】\n${actorsBrief}` : '',
+        npcsBrief ? `【已登场的其他人物】\n${npcsBrief}` : '',
+        `【故事至今（最近记录）】\n${(stage.floors || []).map(f => `${f.name}：${f.text}`).join('\n\n') || '（故事尚未开始）'}`,
+        previous ? `【上一次的推演（供对照，指出哪些已实现、哪些需修正）】\n${previous}` : '',
+        notes ? `【导演备注（最高优先级）】\n${notes}` : '',
+        '输出 JSON。',
+    ].filter(Boolean).join('\n\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+// ---------- 史官 ----------
+
+export const CHRONICLER_SCHEMA_TEXT = `{"summary":"这一楼发生了什么，一句话","actors":[{"name":"演员名（必须与给定名字完全一致）","mood":"一句话心情（无变化留空）","goal":"一句话目标（无变化留空）","memory":"值得记进经历簿的一句（无则留空）","bonds":[{"target":"对象名","delta":-5,"label":"关系标签","note":"一句备注"}],"abilities":{"gained":[{"name":"新获得的能力/物品/身份","note":"说明"}],"changed":[{"name":"已有能力","note":"变化"}],"lost":["失去的能力"]},"sheet":{"personality":"性格上的新变化，一句（无则留空）","appearance":"外貌变化（伤疤、装束等）","backstory":"新增的经历一句","voice":"口吻变化","goals":"长期目标变化"}}],"npcs":[{"name":"这一楼出现的非演员人物","role":"身份","note":"一句备注"}]}`;
+
+export function buildChroniclerMessages({ actors, npcs, floor, prior, fields, plotBeats }) {
+    const enabled = Object.entries(fields || {}).filter(([, v]) => v).map(([k]) => k);
+    const sys = `你是这部多人即兴剧的史官。每当正文（舞台）出现新的一楼，你就核对每位演员的人设、面板与关系，只记录**这一楼里确实发生了的变化**：心情、目标、关系（羁绊分值增减）、能力/物品/身份的得失、人设层面的变化（性格转变、外貌改变、新经历、口吻变化）。
+纪律：
+- 没有变化就不写该演员；没有依据不臆造；羁绊 delta 一次通常在 ±3 到 ±15 之间，重大事件才 ±20 以上；
+- 人设变化只写"这一楼新出现的"，用一句话，不复述旧设定；
+- 只允许更新这些字段：${enabled.join('、') || '（无）'}；其它字段留空或省略；
+- 对象名（bonds.target）用故事里的称呼；演员名必须与给定名字完全一致。
+只输出一个 JSON 对象（不要代码块），格式：${CHRONICLER_SCHEMA_TEXT}`;
+    const roster = actors.map(({ actor, state }) => `## ${actor.name}\n${sheetText(actor, state)}\n${panelText(actor, state)}`).join('\n\n');
+    const user = [
+        `【演员名单与当前状态】\n${roster}`,
+        npcs?.length ? `【已知的其他人物】\n${npcs.map(n => `- ${n.name}${n.role ? '（' + n.role + '）' : ''}${n.note ? '：' + n.note : ''}`).join('\n')}` : '',
+        plotBeats ? `【当前剧情走向（供理解语境）】\n${plotBeats}` : '',
+        prior?.length ? `【之前的楼层（语境）】\n${prior.map(f => `${f.name}：${f.text}`).join('\n\n')}` : '',
+        `【新的一楼】\n${floor.name}：${floor.text}`,
+        '输出 JSON。',
+    ].filter(Boolean).join('\n\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
 }
