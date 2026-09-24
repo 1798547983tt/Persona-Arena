@@ -96,14 +96,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
     chronicler: {
         enabled: false,
         connectionId: '',     // 主 AI（史官）用哪套连接；空 = 工坊连接
-        trigger: 'ai',        // ai | all | manual
+        trigger: 'ai',        // ai：只数正文楼层 | all：玩家发言也算 | manual
+        everyFloors: 3,       // 每 N 层记一次（按 trigger 的计数方式）
         minChars: 40,
         fields: { mood: true, goal: true, bonds: true, chronicle: true, sheet: true, abilities: true, npcs: true },
         maxLog: 20,
     },
     canons: [],               // 原著摘要 [{ id, name, sourceType, digest, chapters, chars, createdAt }]
     connections: [],
-    actors: [],
+    actors: [],               // 演员库（模板，跨聊天复用）；每个聊天自己的演员在 chat_metadata 里
 });
 
 let cachedContext = null;
@@ -152,10 +153,6 @@ export function getConnection(id) {
     return getSettings().connections.find(c => c.id === id) || null;
 }
 
-export function getActor(id) {
-    return getSettings().actors.find(a => a.id === id) || null;
-}
-
 export function upsertConnection(conn) {
     const s = getSettings();
     if (!conn.id) conn.id = uid('conn');
@@ -172,28 +169,29 @@ export function removeConnection(id) {
     saveSettings();
 }
 
-export function upsertActor(actor) {
-    const s = getSettings();
-    if (!actor.id) actor.id = uid('actor');
-    const idx = s.actors.findIndex(a => a.id === actor.id);
-    if (idx >= 0) s.actors[idx] = actor; else s.actors.push(actor);
-    saveSettings();
-    return actor;
+export function normalizeActor(actor) {
+    return deepMerge(structuredClone(DEFAULT_ACTOR), actor || {});
 }
 
-export function removeActor(id) {
+// ---------- 演员库（全局模板） ----------
+
+export function libraryActors() {
+    return getSettings().actors;
+}
+
+export function saveToLibrary(actor) {
+    const s = getSettings();
+    const copy = normalizeActor(structuredClone(actor));
+    if (!copy.id) copy.id = uid('actor');
+    const idx = s.actors.findIndex(a => a.id === copy.id);
+    if (idx >= 0) s.actors[idx] = copy; else s.actors.push(copy);
+    saveSettings();
+    return copy;
+}
+
+export function removeFromLibrary(id) {
     const s = getSettings();
     s.actors = s.actors.filter(a => a.id !== id);
-    saveSettings();
-}
-
-export function moveActor(id, delta) {
-    const s = getSettings();
-    const idx = s.actors.findIndex(a => a.id === id);
-    const target = idx + delta;
-    if (idx < 0 || target < 0 || target >= s.actors.length) return;
-    const [a] = s.actors.splice(idx, 1);
-    s.actors.splice(target, 0, a);
     saveSettings();
 }
 

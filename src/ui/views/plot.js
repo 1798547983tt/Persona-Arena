@@ -171,7 +171,7 @@ export function renderPlot(root, app) {
                 } }),
             ),
         );
-        const autoSel = select([{ value: '0', label: '手动' }, { value: '1', label: '每 1 层' }, { value: '2', label: '每 2 层' }, { value: '3', label: '每 3 层' }, { value: '5', label: '每 5 层' }, { value: '8', label: '每 8 层' }], { value: String(s2.plot.autoEveryFloors || 0) });
+        const autoSel = select([{ value: '0', label: '手动' }, { value: '1', label: '每 1 层正文' }, { value: '2', label: '每 2 层正文' }, { value: '3', label: '每 3 层正文' }, { value: '5', label: '每 5 层正文' }, { value: '8', label: '每 8 层正文' }], { value: String(s2.plot.autoEveryFloors || 0) });
         autoSel.addEventListener('change', () => { s2.plot.autoEveryFloors = Number(autoSel.value); saveSettings(); });
         const depthIn = input({ type: 'number', min: 0, max: 20, value: s2.plot.injectDepth, class: 'pa-input pa-input-num' });
         depthIn.addEventListener('change', () => { s2.plot.injectDepth = Math.max(0, Number(depthIn.value) || 0); saveSettings(); applyInjection(); });

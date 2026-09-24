@@ -1,7 +1,7 @@
 // 史官：正文每出一楼，让指定的"主 AI"核对并更新每位演员的面板、羁绊、能力与人设变化。
 
-import { getSettings, saveSettings, getConnection, getActor, uid } from './settings.js';
-import { getState, saveState, activeActors, getActorState, applyStateUpdate, applyAbilityUpdate, appendOverlay, snapshotActorStates, restoreActorStates, pushChronicleLog, upsertNpc } from './state.js';
+import { getSettings, saveSettings, getConnection, uid } from './settings.js';
+import { getState, saveState, activeActors, getActor, getActorState, applyStateUpdate, applyAbilityUpdate, appendOverlay, snapshotActorStates, restoreActorStates, pushChronicleLog, upsertNpc } from './state.js';
 import { resolveConnection, sendChat } from './connections.js';
 import { buildChroniclerMessages } from './prompts.js';
 import { describeError, requestJson } from './llm.js';
@@ -34,19 +34,40 @@ function findActorByName(actors, name) {
     return actors.find(a => a.name === n) || actors.find(a => n.includes(a.name) || a.name.includes(n)) || null;
 }
 
-/** 事件入口：新楼渲染后延迟 1.2 秒再记（避免连续触发）。 */
+function isFloor(m) { return !!m && !m.is_system && !!floorText(m); }
+
+/** 自上次记录以来的楼层（不含系统消息），可选只数正文（AI）楼层。 */
+function floorsSince(chat, lastFloor, upTo) {
+    const out = [];
+    for (let i = Math.max(0, lastFloor + 1); i <= upTo && i < chat.length; i++) if (isFloor(chat[i])) out.push(i);
+    return out;
+}
+
+/** 事件入口：新楼渲染后按"每 N 层正文"节奏决定是否记录（延迟 1.2 秒合并连续触发）。 */
 export function scheduleRecord(messageId, { isUser = false } = {}) {
     const s = getSettings();
     if (!s.chronicler.enabled) return;
     if (s.chronicler.trigger === 'manual') return;
+    const chat = ctx().chat || [];
+    const idx = Number.isInteger(messageId) ? messageId : chat.length - 1;
+    const st = getState();
+    if (st.chroniclerLastFloor < 0) {
+        // 首次启用：从"现在"开始计数（玩家发言也算起点），不把整段历史当成一批
+        st.chroniclerLastFloor = Math.max(-1, idx - 1);
+        saveState();
+    }
     if (isUser && s.chronicler.trigger !== 'all') return;
+    const pending = floorsSince(chat, st.chroniclerLastFloor, idx);
+    const counted = s.chronicler.trigger === 'all' ? pending : pending.filter(i => !chat[i].is_user);
+    const every = Math.max(1, Number(s.chronicler.everyFloors) || 1);
+    if (counted.length < every) return;
     clearTimeout(timer);
-    timer = setTimeout(() => { recordFloor({ messageId }).catch(err => console.warn('[PersonaArena] chronicler failed', err)); }, 1200);
+    timer = setTimeout(() => { recordFloor({ messageId: idx }).catch(err => console.warn('[PersonaArena] chronicler failed', err)); }, 1200);
 }
 
 /**
- * 记一笔：读取 chat[messageId]（默认最后一楼），让史官输出更新，应用到面板。
- * 返回日志条目；无变化返回 null。
+ * 记一笔：把自上次记录以来的楼层（含玩家发言）一起交给史官，输出更新并应用到面板。
+ * 手动触发且没有新楼时，取最近 N 层正文及其间的玩家发言。返回日志条目；无变化返回 null。
  */
 export async function recordFloor({ messageId, manual = false, onProgress } = {}) {
     if (busy) throw new Error('史官正在记录');
@@ -54,13 +75,25 @@ export async function recordFloor({ messageId, manual = false, onProgress } = {}
     const c = ctx();
     const chat = c.chat || [];
     let idx = Number.isInteger(messageId) ? messageId : chat.length - 1;
-    while (idx >= 0 && (chat[idx]?.is_system || !floorText(chat[idx]))) idx--;
-    const msg = chat[idx];
-    if (!msg) throw new Error('舞台上还没有可记录的楼层');
-    const text = floorText(msg);
-    if (!manual && text.length < (Number(s.chronicler.minChars) || 0)) return null;
+    while (idx >= 0 && !isFloor(chat[idx])) idx--;
+    if (idx < 0) throw new Error('舞台上还没有可记录的楼层');
     const st = getState();
-    if (!manual && st.chroniclerLastFloor === idx && st.chronicleLog.some(l => l.floor === idx)) return null;
+    let indices = st.chroniclerLastFloor < 0 ? [] : floorsSince(chat, st.chroniclerLastFloor, idx);
+    if (!indices.length) {
+        if (!manual) return null;
+        // 手动重记：取最近 N 层正文及其间的玩家发言
+        const every = Math.max(1, Number(s.chronicler.everyFloors) || 1);
+        let aiSeen = 0;
+        for (let i = idx; i >= 0 && aiSeen < every; i--) {
+            if (!isFloor(chat[i])) continue;
+            indices.unshift(i);
+            if (!chat[i].is_user) aiSeen++;
+        }
+    }
+    const minChars = Number(s.chronicler.minChars) || 0;
+    const floors = indices.map(i => ({ index: i, name: chat[i].name, text: floorText(chat[i]) }));
+    const totalChars = floors.reduce((n, f) => n + f.text.length, 0);
+    if (!manual && totalChars < minChars) return null;
     const actors = activeActors();
     if (!actors.length) return null;
     const chatId = c.chatId;
@@ -70,14 +103,16 @@ export async function recordFloor({ messageId, manual = false, onProgress } = {}
     try {
         onProgress?.('史官正在核对…');
         const prior = [];
-        for (let i = idx - 1, n = 0; i >= 0 && n < 2; i--) {
-            if (chat[i]?.is_system) continue;
-            const t = floorText(chat[i]); if (!t) continue;
-            prior.unshift({ name: chat[i].name, text: t.slice(0, 900) }); n++;
+        for (let i = indices[0] - 1, n = 0; i >= 0 && n < 2; i--) {
+            if (!isFloor(chat[i])) continue;
+            prior.unshift({ name: chat[i].name, text: floorText(chat[i]).slice(0, 700) }); n++;
         }
+        // 控制总量：保留最新的楼层，单楼截断
+        let budget = 9000;
+        const trimmed = floors.slice().reverse().map(f => { const t = f.text.slice(0, Math.max(300, Math.min(f.text.length, budget))); budget = Math.max(0, budget - t.length); return { ...f, text: t }; }).reverse();
         const messages = buildChroniclerMessages({
             actors: actors.map(a => ({ actor: a, state: getActorState(a.id) })),
-            npcs: st.npcs, floor: { name: msg.name, text: text.slice(0, 6000) }, prior,
+            npcs: st.npcs, floors: trimmed, prior,
             fields: s.chronicler.fields, plotBeats: plotFeedForActors(),
         });
         const conn = { ...chroniclerConnection(), stream: false };
@@ -122,10 +157,9 @@ export async function recordFloor({ messageId, manual = false, onProgress } = {}
         if (f.npcs && Array.isArray(json.npcs)) for (const n of json.npcs) upsertNpc(n);
         st.chroniclerLastFloor = idx;
         const entry = pushChronicleLog({
-            id: uid('log'), ts: Date.now(), floor: idx, floorName: msg.name,
+            id: uid('log'), ts: Date.now(), floor: idx, floorFrom: indices[0], floorCount: indices.length, floorName: floors[floors.length - 1].name,
             summary: String(json.summary || '').slice(0, 200), changes, snapshot,
         });
-        // 只给最近 3 条留快照
         for (let i = 0; i < st.chronicleLog.length - 3; i++) delete st.chronicleLog[i].snapshot;
         saveState();
         emit({ entry });
@@ -174,7 +208,6 @@ export function solidifyOverlay(actorId) {
         n++;
     }
     st.overlay = {};
-    saveSettings();
     saveState();
     emit({ solidified: actorId });
     return n;

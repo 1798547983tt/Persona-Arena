@@ -1,8 +1,7 @@
 // 私语页：玩家 ↔ 单个演员，可下指令，演员会裁决。
 
 import { h, add, clear, button, icon, renderRich, toast, textarea, toggle, avatarBadge, fmtTime, confirmDialog } from '../dom.js';
-import { getActor } from '../../settings.js';
-import { getState, getWhisper, getActorState, activeActors } from '../../state.js';
+import { getState, getWhisper, getActorState, activeActors, getActor } from '../../state.js';
 import { whisperSend, clearWhisper, cancelPendingInstruction, onSocialChange, isSocialBusy, abortSocial } from '../../social.js';
 
 const DECISION = {

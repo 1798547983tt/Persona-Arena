@@ -223,7 +223,9 @@ export function renderSettings(root, app, params = {}) {
     // ---------- 史官 ----------
     const chronConnSel = select([{ value: '', label: '（工坊连接 / 默认）' }, ...s.connections.map(c => ({ value: c.id, label: c.name }))], { value: s.chronicler.connectionId });
     chronConnSel.addEventListener('change', () => { s.chronicler.connectionId = chronConnSel.value; saveSettings(); });
-    const chronTrig = select([{ value: 'ai', label: '每条正文（AI 楼层）' }, { value: 'all', label: '每一楼（含玩家发言）' }, { value: 'manual', label: '只手动' }], { value: s.chronicler.trigger });
+    const chronTrig = select([{ value: 'ai', label: '只数正文楼层（玩家发言不算，但会一起读）' }, { value: 'all', label: '玩家发言也算一层' }, { value: 'manual', label: '只手动' }], { value: s.chronicler.trigger });
+    const chronEvery = input({ type: 'number', min: 1, max: 20, value: s.chronicler.everyFloors || 3, class: 'pa-input pa-input-num' });
+    chronEvery.addEventListener('change', () => { s.chronicler.everyFloors = Math.max(1, Math.min(20, Number(chronEvery.value) || 3)); saveSettings(); });
     chronTrig.addEventListener('change', () => { s.chronicler.trigger = chronTrig.value; saveSettings(); });
     const chronMin = input({ type: 'number', min: 0, max: 2000, value: s.chronicler.minChars, class: 'pa-input pa-input-num' });
     chronMin.addEventListener('change', () => { s.chronicler.minChars = Math.max(0, Number(chronMin.value) || 0); saveSettings(); });
@@ -232,8 +234,9 @@ export function renderSettings(root, app, params = {}) {
         h('div', { class: 'pa-section-title' }, icon('scroll'), ' 史官（主 AI 动态更新）'),
         toggle(s.chronicler.enabled, (v) => { s.chronicler.enabled = v; saveSettings(); }, '启用：正文每出一楼，让主 AI 更新演员数据'),
         field('史官用哪套连接', chronConnSel, '建议用一个便宜、听话、擅长 JSON 的模型。'),
-        field('触发时机', chronTrig),
-        field('楼层最少字数', chronMin, '太短的楼层（如"嗯"）不记。'),
+        field('每几层记一次', chronEvery, '默认 3：每 3 层正文（约 6 楼，含玩家发言）记一次，把这几楼一起交给史官，不漏也不频繁。'),
+        field('计数方式', chronTrig),
+        field('新增内容最少字数', chronMin, '这几楼加起来太短就不记。'),
         h('div', { class: 'pa-kicker' }, '允许更新'),
         h('div', { class: 'pa-row pa-wrap' }, Object.entries(FIELD_LABELS).map(([k, label]) => toggle(s.chronicler.fields[k] !== false, (v) => { s.chronicler.fields[k] = v; saveSettings(); }, label))),
         h('div', { class: 'pa-field-hint' }, '人设变化只写进本聊天的"本剧中的变化"，不动全局人设卡；在演员详情里可以固化或清除，也可以撤销最近一次记录。'),

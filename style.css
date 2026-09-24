@@ -1209,3 +1209,8 @@ body.noShadows .pa-title-glyph { box-shadow: none !important; }
     .pa-compass-controls { flex-direction: column; align-items: stretch; }
     .pa-lore-list { max-height: 240px; }
 }
+
+.pa-library-list { display: flex; flex-direction: column; gap: 6px; }
+.pa-library-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--pa-hair); border-left: 3px solid var(--pa-actor, var(--pa-hair-strong)); border-radius: var(--pa-radius-sm); background: var(--pa-input-bg); }
+.pa-library-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pa-library-main b { font-family: var(--pa-serif); letter-spacing: .04em; }

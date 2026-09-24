@@ -1,8 +1,8 @@
 // 沙龙页：故事外的大群。
 
 import { h, add, clear, button, icon, renderRich, toast, textarea, avatarBadge, fmtTime, confirmDialog } from '../dom.js';
-import { getSettings, getActor } from '../../settings.js';
-import { getState, activeActors } from '../../state.js';
+import { getSettings } from '../../settings.js';
+import { getState, activeActors, getActor } from '../../state.js';
 import { salonSend, salonAutoTurns, clearSalon, onSocialChange, isSocialBusy, abortSocial } from '../../social.js';
 
 export function renderSalon(root, app) {

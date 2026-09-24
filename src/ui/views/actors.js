@@ -1,7 +1,8 @@
 // 演员页：演员卡、人设编辑、面板（心情/目标/羁绊/经历簿）。
 
 import { h, add, clear, button, icon, toggle, toast, input, textarea, select, field, collapsible, avatarBadge, confirmDialog, promptDialog, renderRich } from '../dom.js';
-import { getSettings, saveSettings, upsertActor, removeActor, moveActor, getActor, DEFAULT_ACTOR, getConnection } from '../../settings.js';
+import { getSettings, saveSettings, DEFAULT_ACTOR, getConnection, libraryActors, saveToLibrary, removeFromLibrary } from '../../settings.js';
+import { chatActors, getActor, upsertActor, removeActor, moveActor, inviteFromLibrary, hasOpenChat } from '../../state.js';
 import { getActorState, saveState, clampBond } from '../../state.js';
 import { PERSONALITY_PRESETS, ORIGIN_LABELS } from '../../prompts.js';
 import { generateSheet, extractNpcSheet, extractFromCanon, sheetFromCharacter, listCharacters } from '../../search.js';
@@ -29,8 +30,27 @@ export function renderActors(root, app, params = {}) {
     function rerender() { clear(root); mode === 'edit' ? renderEditor() : mode === 'detail' ? renderDetail() : renderList(); }
 
     // ---------- 列表 ----------
+    function libraryPanel() {
+        const lib = libraryActors();
+        const present = new Set(chatActors().map(a => a.id));
+        const list = h('div', { class: 'pa-library-list' });
+        if (!lib.length) add(list, h('div', { class: 'pa-muted pa-small' }, '演员库是空的。保存演员时勾选「同时存入演员库」，或在演员详情里点「存入演员库」，以后任何聊天都能一键邀请。'));
+        for (const a of lib) {
+            const inChat = present.has(a.id);
+            add(list, h('div', { class: 'pa-library-item', style: { '--pa-actor': a.color } },
+                avatarBadge(a, 'sm'),
+                h('div', { class: 'pa-library-main' }, h('b', {}, a.name), h('span', { class: 'pa-muted pa-small' }, ORIGIN_LABELS[a.sheet?.origin] || '原创', a.sheet?.source ? ` · 《${a.sheet.source}》` : '', a.sheet?.presetId ? ` · ${PERSONALITY_PRESETS.find(p => p.id === a.sheet.presetId)?.name || ''}` : '')),
+                h('div', { class: 'pa-row' },
+                    button(inChat ? '已在场' : '邀请', { icon: inChat ? 'check' : 'user-plus', kind: inChat ? 'ghost small' : 'primary small', disabled: inChat, onClick: () => { const c = inviteFromLibrary(a.id); if (c) { toast('success', `「${c.name}」已加入本聊天`); rerender(); } } }),
+                    button('', { icon: 'trash', kind: 'ghost small', title: '从演员库删除（不影响已在场的）', onClick: async () => { if (await confirmDialog('删除库中演员', `从演员库删除「${a.name}」？已邀请到各聊天里的不受影响。`)) { removeFromLibrary(a.id); rerender(); } } }),
+                ),
+            ));
+        }
+        return collapsible(`演员库（${lib.length}）· 跨聊天复用的模板`, list, { open: !chatActors().length && lib.length > 0 });
+    }
+
     function renderList() {
-        const actors = getSettings().actors;
+        const actors = chatActors();
         const grid = h('div', { class: 'pa-actor-grid' });
         for (const a of actors) {
             const st = getActorState(a.id);
@@ -57,10 +77,12 @@ export function renderActors(root, app, params = {}) {
         const addCard = h('button', { type: 'button', class: 'pa-actor-card pa-actor-add', onClick: () => { editing = newActor(); mode = 'edit'; rerender(); } }, icon('plus'), h('span', {}, '新演员'));
         add(grid, addCard);
         add(root, 
-            h('div', { class: 'pa-section-title' }, icon('user-astronaut'), ' 演员表', h('span', { class: 'pa-muted pa-small' }, `　${actors.filter(a => a.enabled).length}/${actors.length} 在场`)),
+            h('div', { class: 'pa-section-title' }, icon('user-astronaut'), ' 演员表', h('span', { class: 'pa-muted pa-small' }, `　${actors.filter(a => a.enabled).length}/${actors.length} 在场 · 只属于当前聊天`)),
+            hasOpenChat() ? null : h('div', { class: 'pa-hint' }, '还没有打开任何聊天。演员、面板、沙龙都跟随"某张角色卡的某个聊天"保存，请先打开一个聊天再添加演员。'),
             chroniclerBar(),
-            actors.length ? null : h('div', { class: 'pa-empty pa-empty-poem' }, h('p', {}, '一个人也演不成戏。'), h('p', {}, '点「新演员」，可以手写人设、套用性格预设、从角色卡导入、从舞台提炼 NPC，或联网搜索同人角色一键生成。')),
+            actors.length ? null : h('div', { class: 'pa-empty pa-empty-poem' }, h('p', {}, '一个人也演不成戏。'), h('p', {}, '这个聊天还没有演员。点「新演员」新建，或从下方演员库邀请；每个聊天的演员、面板、沙龙互不干扰。')),
             grid,
+            libraryPanel(),
         );
     }
 
@@ -73,8 +95,8 @@ export function renderActors(root, app, params = {}) {
         const last = log[log.length - 1];
         const bar = h('div', { class: 'pa-chronicler-bar' },
             h('div', { class: 'pa-chronicler-info' },
-                h('span', { class: `pa-chip ${s.chronicler.enabled ? 'pa-chip-ok' : ''}` }, icon('scroll'), s.chronicler.enabled ? ` 史官 · ${s.chronicler.trigger === 'all' ? '每楼' : s.chronicler.trigger === 'ai' ? '每条正文' : '手动'}` : ' 史官未开启'),
-                h('span', { class: 'pa-muted pa-small' }, last ? `上次：第 ${last.floor} 楼 · ${last.summary || '已记录'}` : '正文每出一楼，主 AI 会核对并更新演员的心情、目标、羁绊、能力与人设变化。'),
+                h('span', { class: `pa-chip ${s.chronicler.enabled ? 'pa-chip-ok' : ''}` }, icon('scroll'), s.chronicler.enabled ? ` 史官 · ${s.chronicler.trigger === 'manual' ? '手动' : `每 ${s.chronicler.everyFloors || 3} 层${s.chronicler.trigger === 'all' ? '' : '正文'}`}` : ' 史官未开启'),
+                h('span', { class: 'pa-muted pa-small' }, last ? `上次：${last.floorCount > 1 ? `第 ${last.floorFrom}–${last.floor} 楼` : `第 ${last.floor} 楼`} · ${last.summary || '已记录'}` : '每隔几层正文，主 AI 会把新增楼层一起核对，更新演员的心情、目标、羁绊、能力与人设变化。'),
             ),
             h('div', { class: 'pa-row pa-wrap' },
                 busy ? button('中止', { icon: 'stop', kind: 'danger small', onClick: () => abortChronicler() }) : null,
@@ -87,7 +109,7 @@ export function renderActors(root, app, params = {}) {
         );
         if (log.length) {
             add(bar, collapsible(`史官日志（${log.length}）`, h('div', { class: 'pa-log-list' }, log.slice().reverse().map(e => h('div', { class: 'pa-log-item' },
-                h('div', { class: 'pa-kicker' }, `第 ${e.floor} 楼 · ${e.floorName || ''}`),
+                h('div', { class: 'pa-kicker' }, `${e.floorCount > 1 ? `第 ${e.floorFrom}–${e.floor} 楼` : `第 ${e.floor} 楼`} · ${e.floorName || ''}`),
                 h('div', {}, e.summary || '（无摘要）'),
                 e.changes?.length ? h('ul', { class: 'pa-log-changes' }, e.changes.map(ch => h('li', {}, h('b', {}, ch.name), '：', ch.diff.join('，')))) : h('div', { class: 'pa-muted pa-small' }, '没有变化'),
             )))));
@@ -108,6 +130,7 @@ export function renderActors(root, app, params = {}) {
                 toggle(a.enabled, (v) => { a.enabled = v; upsertActor(a); }, '在场'),
                 button('私语', { icon: 'feather-pointed', kind: 'ghost small', onClick: () => app.openTab('whisper', { actorId: a.id }) }),
                 button('编辑人设', { icon: 'pen', kind: 'ghost small', onClick: () => { editing = structuredClone(a); mode = 'edit'; rerender(); } }),
+                button('存入演员库', { icon: 'box-archive', kind: 'ghost small', title: '把当前人设（不含本剧变化）存为模板，别的聊天可以邀请', onClick: () => { saveToLibrary(a); toast('success', `「${a.name}」已存入演员库`); } }),
                 button('', { icon: 'arrow-up', kind: 'ghost small', title: '出手顺序提前', onClick: () => { moveActor(a.id, -1); toast('info', '顺序已调整'); } }),
                 button('', { icon: 'arrow-down', kind: 'ghost small', title: '出手顺序靠后', onClick: () => { moveActor(a.id, 1); toast('info', '顺序已调整'); } }),
             ),
@@ -306,10 +329,13 @@ export function renderActors(root, app, params = {}) {
             try { applySheet(await extractFromCanon({ name: nm, canon, hints: tas.personality.value.trim(), connectionId: a.connectionId, onProgress: setProgress })); toast('success', `已从《${canon.name}》提炼「${nm}」`); }
             catch (err) { toast('error', err.message); } finally { canonSel.disabled = false; setProgress(''); }
         });
+        const libToggle = toggle(!a.id, () => {}, '同时存入演员库');
         const saveBtn = button('保存演员', { icon: 'check', kind: 'primary', onClick: () => {
             a.name = nameIn.value.trim();
             if (!a.name) { toast('warning', '名字不能为空'); return; }
+            if (!hasOpenChat()) { toast('warning', '先打开一个聊天，演员只属于当前聊天'); return; }
             upsertActor(a);
+            if (libToggle.querySelector('input').checked) saveToLibrary(a);
             toast('success', `「${a.name}」已就位`);
             detailId = a.id; mode = 'detail'; rerender();
         } });
@@ -338,7 +364,7 @@ export function renderActors(root, app, params = {}) {
                     collapsible('高级：自定义行动提示词', field('完全替换内置提示词', overrideT)),
                 ),
             ),
-            h('div', { class: 'pa-row pa-editor-actions' }, saveBtn, cancelBtn, delBtn),
+            h('div', { class: 'pa-row pa-editor-actions' }, saveBtn, libToggle, cancelBtn, delBtn),
         );
     }
 

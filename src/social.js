@@ -1,7 +1,7 @@
 // 沙龙（故事外大群）与私语（玩家 ↔ 单个演员）。
 
 import { getSettings, uid } from './settings.js';
-import { getState, saveState, getActorState, pushSalon, getWhisper, pushWhisper, activeActors } from './state.js';
+import { getState, saveState, getActorState, pushSalon, getWhisper, pushWhisper, activeActors, getActor } from './state.js';
 import { collectStage } from './stage.js';
 import { buildSalonMessages, buildWhisperMessages } from './prompts.js';
 import { generateFor, parseSalon, parseWhisper, describeError } from './llm.js';
@@ -116,7 +116,7 @@ export function clearSalon() {
 /** 私语：玩家对某个演员说话；asInstruction 时演员会给出裁决。 */
 export async function whisperSend(actorId, text, { asInstruction = false } = {}) {
     if (busy) throw new Error('有演员正在回应');
-    const actor = getSettings().actors.find(a => a.id === actorId);
+    const actor = getActor(actorId);
     if (!actor) throw new Error('找不到演员');
     const t = String(text || '').trim();
     if (!t) return;

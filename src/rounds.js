@@ -1,7 +1,7 @@
 // 回合：全体演员各出一手 → 汇总 → 复制/发送。
 
 import { getSettings } from './settings.js';
-import { getState, saveState, getActorState, applyStateUpdate, pushRound, activeActors } from './state.js';
+import { getState, saveState, getActorState, applyStateUpdate, pushRound, activeActors, getActor } from './state.js';
 import { collectStage, sendToStage, copyText, putInInput } from './stage.js';
 import { buildMoveMessages, buildSalonDigest } from './prompts.js';
 import { generateFor, parseMove, truncateMove, describeError } from './llm.js';
@@ -125,7 +125,7 @@ export async function startRound() {
 export async function regenerateMove(round, actorId) {
     if (running) throw new Error('已有回合在进行');
     const settings = getSettings();
-    const actor = getSettings().actors.find(a => a.id === actorId);
+    const actor = getActor(actorId);
     const move = round.moves.find(m => m.actorId === actorId);
     if (!actor || !move) throw new Error('找不到演员');
     const stage = await collectStage(settings);

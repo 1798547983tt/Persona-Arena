@@ -1,6 +1,6 @@
 // 每个舞台（聊天）一份的运行态：回合、面板、沙龙、私语。存 chat_metadata['persona-arena']。
 
-import { MODULE_NAME, getSettings } from './settings.js';
+import { MODULE_NAME, getSettings, normalizeActor, uid } from './settings.js';
 
 export const LIMITS = Object.freeze({
     rounds: 30,
@@ -62,7 +62,70 @@ export function getState() {
     st.chronicleLog ??= [];
     st.npcs ??= [];
     st.chroniclerLastFloor ??= -1;
+    if (!Array.isArray(st.actors)) {
+        // 迁移：老版本演员是全局的；这个聊天里有过面板记录的演员，从演员库复制进来
+        st.actors = [];
+        const lib = getSettings().actors || [];
+        for (const id of Object.keys(st.actorState || {})) {
+            const a = lib.find(x => x.id === id);
+            if (a) st.actors.push(normalizeActor(structuredClone(a)));
+        }
+        if (st.actors.length) saveState();
+    }
     return st;
+}
+
+export function hasOpenChat() {
+    const c = ctx();
+    return !!(c.chatId || c.groupId);
+}
+
+// ---------- 本聊天的演员 ----------
+
+export function chatActors() {
+    return getState().actors;
+}
+
+export function getActor(id) {
+    return chatActors().find(a => a.id === id) || null;
+}
+
+export function upsertActor(actor) {
+    const list = chatActors();
+    if (!actor.id) actor.id = uid('actor');
+    const idx = list.findIndex(a => a.id === actor.id);
+    if (idx >= 0) list[idx] = actor; else list.push(actor);
+    saveState();
+    return actor;
+}
+
+export function removeActor(id) {
+    const st = getState();
+    st.actors = st.actors.filter(a => a.id !== id);
+    saveState();
+}
+
+export function moveActor(id, delta) {
+    const list = chatActors();
+    const idx = list.findIndex(a => a.id === id);
+    const target = idx + delta;
+    if (idx < 0 || target < 0 || target >= list.length) return;
+    const [a] = list.splice(idx, 1);
+    list.splice(target, 0, a);
+    saveState();
+}
+
+/** 从演员库邀请一位演员到本聊天（复制一份；已在场则返回 null）。 */
+export function inviteFromLibrary(libraryId) {
+    const lib = (getSettings().actors || []).find(a => a.id === libraryId);
+    if (!lib) return null;
+    const list = chatActors();
+    if (list.some(a => a.id === lib.id)) return null;
+    const copy = normalizeActor(structuredClone(lib));
+    copy.libraryId = lib.id;
+    list.push(copy);
+    saveState();
+    return copy;
 }
 
 export function getPlot() {
@@ -247,7 +310,7 @@ export function pushWhisper(actorId, msg) {
     return msg;
 }
 
-/** 所有启用的演员，按顺序。 */
+/** 本聊天里所有启用的演员，按顺序。 */
 export function activeActors() {
-    return getSettings().actors.filter(a => a.enabled && a.name);
+    return chatActors().filter(a => a.enabled && a.name);
 }

@@ -1,8 +1,8 @@
 // 舞台页：开回合、看行动、汇总、发送。
 
 import { h, add, clear, button, icon, toggle, renderRich, toast, textarea, collapsible, avatarBadge, fmtTime, confirmDialog } from '../dom.js';
-import { getSettings, saveSettings, getActor } from '../../settings.js';
-import { getState, activeActors, currentRound, saveState } from '../../state.js';
+import { getSettings, saveSettings } from '../../settings.js';
+import { getState, activeActors, currentRound, saveState, getActor } from '../../state.js';
 import { startRound, abortRound, isRunning, regenerateMove, setMoveText, composeDispatch, dispatchRound, onRoundChange } from '../../rounds.js';
 import { recentFloors, scanLore } from '../../stage.js';
 import { markMoves, settleMovesIfRedrawn, sweepComplete } from '../motion.js';

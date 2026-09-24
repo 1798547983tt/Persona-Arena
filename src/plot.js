@@ -419,9 +419,11 @@ export function onFloorRendered() {
     const every = Number(s.plot.autoEveryFloors) || 0;
     if (!every || busy) return;
     const plot = getPlot();
-    const len = (ctx().chat || []).length;
+    const chat = ctx().chat || [];
     if (plot.compassFloor < 0 && !plot.canonId && !plot.notes && !plot.loreUids?.length) return; // 没配置过就不自动跑
-    if (len - Math.max(0, plot.compassFloor) >= every) {
+    // 只数正文（AI）楼层，玩家发言不算
+    const since = chat.slice(Math.max(0, plot.compassFloor)).filter(m => !m.is_system && !m.is_user).length;
+    if (since >= every) {
         generateCompass().catch(err => console.warn('[PersonaArena] auto compass failed', err));
     }
 }

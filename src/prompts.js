@@ -319,9 +319,10 @@ ${JSON_ONLY_RULE}`;
 
 export const CHRONICLER_SCHEMA_TEXT = `{"summary":"这一楼发生了什么，一句话","actors":[{"name":"演员名（必须与给定名字完全一致）","mood":"一句话心情（无变化留空）","goal":"一句话目标（无变化留空）","memory":"值得记进经历簿的一句（无则留空）","bonds":[{"target":"对象名","delta":-5,"label":"关系标签","note":"一句备注"}],"abilities":{"gained":[{"name":"新获得的能力/物品/身份","note":"说明"}],"changed":[{"name":"已有能力","note":"变化"}],"lost":["失去的能力"]},"sheet":{"personality":"性格上的新变化，一句（无则留空）","appearance":"外貌变化（伤疤、装束等）","backstory":"新增的经历一句","voice":"口吻变化","goals":"长期目标变化"}}],"npcs":[{"name":"这一楼出现的非演员人物","role":"身份","note":"一句备注"}]}`;
 
-export function buildChroniclerMessages({ actors, npcs, floor, prior, fields, plotBeats }) {
+export function buildChroniclerMessages({ actors, npcs, floors, floor, prior, fields, plotBeats }) {
+    const batch = Array.isArray(floors) && floors.length ? floors : (floor ? [floor] : []);
     const enabled = Object.entries(fields || {}).filter(([, v]) => v).map(([k]) => k);
-    const sys = `你是这部多人即兴剧的史官。每当正文（舞台）出现新的一楼，你就核对每位演员的人设、面板与关系，只记录**这一楼里确实发生了的变化**：心情、目标、关系（羁绊分值增减）、能力/物品/身份的得失、人设层面的变化（性格转变、外貌改变、新经历、口吻变化）。
+    const sys = `你是这部多人即兴剧的史官。每隔几楼，你核对一次每位演员的人设、面板与关系，只记录**新增楼层里确实发生了的变化**（把这几楼合起来看，一次性给出净变化）：心情、目标、关系（羁绊分值增减）、能力/物品/身份的得失、人设层面的变化（性格转变、外貌改变、新经历、口吻变化）。
 纪律：
 - 没有变化就不写该演员；没有依据不臆造；羁绊 delta 一次通常在 ±3 到 ±15 之间，重大事件才 ±20 以上；
 - 人设变化只写"这一楼新出现的"，用一句话，不复述旧设定；
@@ -334,8 +335,8 @@ ${JSON_ONLY_RULE}`;
         `【演员名单与当前状态】\n${roster}`,
         npcs?.length ? `【已知的其他人物】\n${npcs.map(n => `- ${n.name}${n.role ? '（' + n.role + '）' : ''}${n.note ? '：' + n.note : ''}`).join('\n')}` : '',
         plotBeats ? `【当前剧情走向（供理解语境）】\n${plotBeats}` : '',
-        prior?.length ? `【之前的楼层（语境）】\n${prior.map(f => `${f.name}：${f.text}`).join('\n\n')}` : '',
-        `【新的一楼】\n${floor.name}：${floor.text}`,
+        prior?.length ? `【更早的楼层（语境）】\n${prior.map(f => `${f.name}：${f.text}`).join('\n\n')}` : '',
+        `【新增的楼层（按顺序，共 ${batch.length} 楼）】\n${batch.map(f => `${f.name}：${f.text}`).join('\n\n')}`,
         '输出 JSON。',
     ].filter(Boolean).join('\n\n');
     return [{ role: 'system', content: sys }, { role: 'user', content: user }];
