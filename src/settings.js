@@ -83,6 +83,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     },
     plot: {
         autoEveryFloors: 0,   // 0 = 手动；N = 每 N 层自动推演
+        contextFloors: 12,    // 推演时读最近几层正文
         injectEnabled: true,  // 把罗盘引导注入正文提示词
         injectDepth: 1,
         injectRole: 0,        // 0 system / 1 user / 2 assistant

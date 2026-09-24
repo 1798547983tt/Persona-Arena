@@ -26,9 +26,45 @@ export function plotConnection() {
 
 // ---------- 原著来源 ----------
 
+function ctxHeaders() {
+    try { return ctx().getRequestHeaders(); } catch { return { 'Content-Type': 'application/json' }; }
+}
+
+let cachedNames = [];
+
+/** 世界书名字：优先上下文接口，其次酒馆编辑器下拉框，最后直接问服务器。 */
+export async function refreshLoreBooks() {
+    const c = ctx();
+    let names = [];
+    try { if (typeof c.updateWorldInfoList === 'function') await c.updateWorldInfoList(); } catch { /* 忽略 */ }
+    try { if (typeof c.getWorldInfoNames === 'function') names = c.getWorldInfoNames() || []; } catch { names = []; }
+    if (!names.length) {
+        names = [...document.querySelectorAll('#world_editor_select option, #world_info option')]
+            .map(o => String(o.textContent || '').trim())
+            .filter(t => t && !/^-{2,}/.test(t) && !/pick to edit/i.test(t));
+    }
+    if (!names.length) {
+        try {
+            const res = await fetch('/api/settings/get', { method: 'POST', headers: ctxHeaders(), body: '{}' });
+            if (res.ok) { const data = await res.json(); names = Array.isArray(data?.world_names) ? data.world_names : []; }
+        } catch { /* 忽略 */ }
+    }
+    cachedNames = [...new Set(names.map(String))];
+    return listLoreBooks();
+}
+
 export function listLoreBooks() {
     const c = ctx();
-    const names = typeof c.getWorldInfoNames === 'function' ? c.getWorldInfoNames() : [];
+    let names = cachedNames;
+    if (!names.length) {
+        try { if (typeof c.getWorldInfoNames === 'function') names = c.getWorldInfoNames() || []; } catch { names = []; }
+        if (!names.length) {
+            names = [...document.querySelectorAll('#world_editor_select option, #world_info option')]
+                .map(o => String(o.textContent || '').trim())
+                .filter(t => t && !/^-{2,}/.test(t) && !/pick to edit/i.test(t));
+        }
+        names = [...new Set(names.map(String))];
+    }
     const ch = (c.characterId !== undefined && c.characterId !== null) ? c.characters?.[c.characterId] : null;
     const charBook = ch?.data?.extensions?.world || '';
     const chatBook = c.chatMetadata?.world_info || '';
@@ -36,13 +72,27 @@ export function listLoreBooks() {
         .sort((a, b) => (b.bound ? 1 : 0) - (a.bound ? 1 : 0));
 }
 
-export async function loadLoreEntries(book) {
+async function fetchWorldInfo(book) {
     const c = ctx();
-    const data = await c.loadWorldInfo(book);
-    const entries = data?.entries ? Object.values(data.entries) : [];
+    let data = null;
+    try { if (typeof c.loadWorldInfo === 'function') data = await c.loadWorldInfo(book); } catch { data = null; }
+    if (!data) {
+        const res = await fetch('/api/worldinfo/get', { method: 'POST', headers: ctxHeaders(), body: JSON.stringify({ name: book }) });
+        if (!res.ok) throw new Error(`读取世界书失败（${res.status}）`);
+        data = await res.json();
+    }
+    return data;
+}
+
+export async function loadLoreEntries(book) {
+    if (!book) return [];
+    const data = await fetchWorldInfo(book);
+    const raw = data?.entries;
+    const entries = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
     return entries
-        .map(e => ({
-            uid: e.uid, comment: String(e.comment || '').trim(), key: Array.isArray(e.key) ? e.key : [],
+        .map((e, i) => ({
+            uid: Number.isFinite(Number(e.uid)) ? Number(e.uid) : i,
+            comment: String(e.comment || '').trim(), key: Array.isArray(e.key) ? e.key : (typeof e.key === 'string' ? e.key.split(',').map(x => x.trim()).filter(Boolean) : []),
             content: String(e.content || ''), disable: !!e.disable, constant: !!e.constant, order: Number(e.order ?? 100),
         }))
         .filter(e => e.content.trim())
@@ -142,6 +192,50 @@ export async function canonFromLore({ book, uids, name, onProgress, signal }) {
     return canon;
 }
 
+/** 同人：按作品名，联网搜索（可选）后凭模型知识写原著梗概。 */
+export async function canonFromKnowledge({ name, hints, useSearch, onProgress, signal }) {
+    if (busy) throw new Error('剧情模块正忙');
+    busy = 'summarize';
+    controller = new AbortController();
+    const sig = signal || controller.signal;
+    try {
+        let digestSource = '';
+        let provider = '';
+        if (useSearch) {
+            onProgress?.('正在联网搜索原著资料…');
+            try {
+                const { webSearch, readPage, searchDigest } = await import('./search.js');
+                const queries = [`${name} 剧情 梗概`, `${name} 人物 关系 结局`];
+                const seen = new Set();
+                const results = [];
+                for (const q of queries) {
+                    if (sig.aborted) throw new Error('已中止');
+                    const r = await webSearch(q);
+                    provider = r.provider;
+                    for (const x of r.results) if (x.url && !seen.has(x.url)) { seen.add(x.url); results.push(x); }
+                }
+                digestSource = searchDigest(results.slice(0, 8), 3500);
+                const best = results.find(r => /wiki|百科|fandom|moegirl|萌娘/i.test(r.url)) || results[0];
+                if (best?.url) { try { digestSource += '\n\n【正文摘录：' + best.url + '】\n' + await readPage(best.url, 3500); } catch { /* 忽略 */ } }
+            } catch (err) {
+                onProgress?.(`搜索失败（${err.message}），改为凭模型知识撰写…`);
+            }
+        }
+        onProgress?.('正在撰写原著梗概…');
+        const { buildCanonFromKnowledgeMessages } = await import('./prompts.js');
+        const s = getSettings();
+        const digest = await llm(buildCanonFromKnowledgeMessages({ name, hints, sources: digestSource, maxChars: Number(s.plot.digestMaxChars) || 5000 }), { maxTokens: 2600, temperature: 0.4, signal: sig });
+        if (!digest || digest.length < 80) throw new Error('模型没有写出可用的梗概');
+        const canon = upsertCanon({ id: uid('canon'), name, sourceType: 'knowledge', digest, chapters: [], chars: digest.length, chunks: 0, createdAt: Date.now(), searched: !!digestSource, provider });
+        emit({ canon });
+        return canon;
+    } finally {
+        busy = '';
+        controller = null;
+        emit({});
+    }
+}
+
 export function canonFromText({ name, digest }) {
     const canon = upsertCanon({ id: uid('canon'), name, sourceType: 'manual', digest: String(digest || '').trim(), chapters: [], chars: digest.length, chunks: 0, createdAt: Date.now() });
     emit({ canon });
@@ -199,6 +293,8 @@ function normalizeCompass(obj) {
         butterflies: objs(obj.butterflies, ['origin', 'chain', 'outcome']).map(b => ({ ...b, chain: arr(b.chain).map(String) })),
         beats: strs(obj.beats).slice(0, 5),
         guidance: String(obj.guidance || '').trim(),
+        canonAhead: objs(obj.canonAhead ?? obj.canon_ahead, ['event', 'status', 'why']),
+        oocRisks: strs(obj.oocRisks ?? obj.ooc_risks),
     };
 }
 
@@ -212,6 +308,8 @@ export function compassToText(compass, { brief = false } = {}) {
     if (compass.impossible?.length) L.push(`已不可能发生：\n${compass.impossible.map(x => `- ${x}`).join('\n')}`);
     if (compass.possible?.length && !brief) L.push(`可能发生：\n${compass.possible.map(p => `- ${p.what || ''}${p.chance ? '（' + p.chance + '）' : ''}${p.trigger ? '，触发：' + p.trigger : ''}`).join('\n')}`);
     if (compass.butterflies?.length && !brief) L.push(`蝴蝶效应：\n${compass.butterflies.map(b => `- ${b.origin || ''} → ${(b.chain || []).join(' → ')}${b.outcome ? ' ⇒ ' + b.outcome : ''}`).join('\n')}`);
+    if (compass.canonAhead?.length) L.push(`原著接下来的事：\n${compass.canonAhead.map(e => `- ${e.event || ''}${e.status ? '【' + e.status + '】' : ''}${e.why ? '：' + e.why : ''}`).join('\n')}`);
+    if (compass.oocRisks?.length && !brief) L.push(`OOC 提醒：\n${compass.oocRisks.map(x => `- ${x}`).join('\n')}`);
     if (compass.beats?.length) L.push(`接下来的节拍：\n${compass.beats.map((x, i) => `${i + 1}. ${x}`).join('\n')}`);
     if (compass.guidance) L.push(`引导：${compass.guidance}`);
     return L.join('\n\n');
@@ -224,7 +322,8 @@ export function injectionText() {
     const c = { ...plot.compass };
     if (plot.guidanceOverride?.trim()) c.guidance = plot.guidanceOverride.trim();
     const body = compassToText(c, { brief: true });
-    return `[剧情罗盘 · 导演给叙事者的走向指引]\n${body}\n（说明：把"必然会发生"的事自然地推向发生，不要生硬点明；不要写"已不可能发生"的事；其余交给人物的选择。这是幕后指引，不要在正文里提及"罗盘"或"导演"。）`;
+    const ooc = plot.compass.oocRisks?.length ? `\n人物分寸（避免 OOC）：${plot.compass.oocRisks.slice(0, 4).join('；')}` : '';
+    return `[剧情罗盘 · 导演给叙事者的走向指引]\n${body}${ooc}\n（说明：把"必然会发生"的事自然地推向发生，不要生硬点明；不要写"已不可能发生"的事；原著人物保持原著性格与说话方式；其余交给人物的选择。这是幕后指引，不要在正文里提及"罗盘"或"导演"。）`;
 }
 
 /** 给演员看的简版。 */
@@ -262,7 +361,7 @@ export async function generateCompass({ onProgress, signal } = {}) {
     const chatId = ctx().chatId;
     try {
         onProgress?.('正在读取舞台与设定…');
-        const stage = await collectStage({ ...s, contextFloors: Math.max(8, s.contextFloors), includeWorldInfo: true });
+        const stage = await collectStage({ ...s, contextFloors: Math.max(1, Number(s.plot.contextFloors) || 12), includeWorldInfo: true });
         const canon = plot.canonId ? getCanon(plot.canonId) : null;
         let loreText = '';
         if (plot.loreBook && plot.loreUids?.length) {

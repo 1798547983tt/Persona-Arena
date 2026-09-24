@@ -1185,6 +1185,8 @@ body.noShadows .pa-title-glyph { box-shadow: none !important; }
 .pa-compass-possible { --pa-c: var(--pa-pine); }
 .pa-compass-butterflies { --pa-c: var(--pa-rouge); }
 .pa-compass-beats { --pa-c: var(--pa-indigo-tint); }
+.pa-compass-canon { --pa-c: var(--pa-azure); }
+.pa-compass-ooc { --pa-c: var(--pa-gamboge); }
 .pa-compass-guidance { --pa-c: var(--pa-gold); grid-column: 1 / -1; }
 .pa-compass-guidance textarea { margin-bottom: 8px; }
 .pa-chain { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }

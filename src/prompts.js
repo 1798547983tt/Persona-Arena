@@ -295,6 +295,7 @@ export function buildCompassMessages({ canonName, canonDigest, loreText, stage, 
 - "脱离原著"要指出是哪个变化造成的、后果是什么；
 - "不可能"要说明原著里的前提在这里为何已不成立；
 - 蝴蝶效应从一件已经发生的小事出发，写清连锁；
+- 这是同人向的推演：canonAhead 列出原著时间线上接下来本该发生的事与登场人物，并标注在当前局面下是如期、提前、推迟、已不可能还是已变形；oocRisks 指出原著人物在此处最容易写偏的性格/口吻/立场；
 - 引导（guidance）写给正文 AI 看：具体、可执行、不剧透式地点明，尊重人物动机与已成立的事实。
 ${canonDigest ? '有原著时，以原著逻辑为基准；' : '没有原著时，以故事内已成立的事实、人物动机与世界规则为基准；'}导演备注优先级最高。
 只输出一个 JSON 对象（不要代码块、不要前后缀），字段与含义：${COMPASS_SCHEMA_TEXT}
@@ -333,6 +334,36 @@ export function buildChroniclerMessages({ actors, npcs, floor, prior, fields, pl
         prior?.length ? `【之前的楼层（语境）】\n${prior.map(f => `${f.name}：${f.text}`).join('\n\n')}` : '',
         `【新的一楼】\n${floor.name}：${floor.text}`,
         '输出 JSON。',
+    ].filter(Boolean).join('\n\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+
+export function buildCanonFromKnowledgeMessages({ name, hints, sources, maxChars }) {
+    const sys = `你是熟悉各类小说、动漫、游戏与影视作品的资深编辑，要为《${name}》写一份"原著梗概"，供另一个 AI 判断同人故事的走向。${sources ? '优先依据给定资料，资料没有的用你自己的知识补全；' : '凭你自己对这部作品的知识撰写；'}拿不准的地方标注"（不确定）"，不要编造。用 Markdown，严格按以下小节输出，总长不超过 ${maxChars} 字：
+## 一句话概括
+## 主线梗概（按时间顺序，分阶段或分卷）
+## 主要人物（名字：身份、性格与口吻特征、动机、与他人的关系、结局或去向）
+## 关键转折点（编号，每条一句：事件 → 后果）
+## 世界规则与设定（力量体系、势力、地理、禁忌）
+## 伏笔与未解之谜
+## 原著的必然逻辑（哪些事在原著逻辑下"必然"发生，为什么）
+## 同人常见 OOC 点（写这部作品的人物最容易写偏的地方）`;
+    const user = [
+        `作品：《${name}》`,
+        hints ? `补充说明：${hints}` : '',
+        sources ? `【资料】\n${sources}` : '',
+        '输出梗概。',
+    ].filter(Boolean).join('\n\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+export function buildCanonCharacterMessages({ name, canonName, digest, hints }) {
+    const sys = `你是资深的角色设定编辑。根据《${canonName}》的原著梗概（以及你对这部作品的了解），为人物「${name}」写一份可直接用于即兴剧演员的人设卡：忠于原著，具体到口癖、习惯动作、价值观与底线，写出矛盾与执念；梗概里没写到的细节可凭你对原作的知识补全，但不要与梗概冲突。只输出一个 JSON 对象，不要代码块。字段：${SHEET_SCHEMA}`;
+    const user = [
+        `【原著梗概】\n${digest}`,
+        hints ? `额外要求：${hints}` : '',
+        `写「${name}」的人设卡。输出 JSON。`,
     ].filter(Boolean).join('\n\n');
     return [{ role: 'system', content: sys }, { role: 'user', content: user }];
 }

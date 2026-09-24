@@ -135,7 +135,7 @@ function init() {
 
     runtime = {
         orb, panel,
-        open: (tab) => panel.open(tab),
+        open: (tab, tabParams) => panel.open(tab, tabParams),
         destroy() {
             for (const d of disposers) { try { d?.(); } catch { /* 忽略 */ } }
             panel.destroy(); orb.destroy();

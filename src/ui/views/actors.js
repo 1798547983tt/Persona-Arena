@@ -4,7 +4,7 @@ import { h, add, clear, button, icon, toggle, toast, input, textarea, select, fi
 import { getSettings, saveSettings, upsertActor, removeActor, moveActor, getActor, DEFAULT_ACTOR, getConnection } from '../../settings.js';
 import { getActorState, saveState, clampBond } from '../../state.js';
 import { PERSONALITY_PRESETS, ORIGIN_LABELS } from '../../prompts.js';
-import { generateSheet, extractNpcSheet, sheetFromCharacter, listCharacters } from '../../search.js';
+import { generateSheet, extractNpcSheet, extractFromCanon, sheetFromCharacter, listCharacters } from '../../search.js';
 import { ensureDefaultConnection } from '../../connections.js';
 import { recordFloor, undoLast, solidifyOverlay, clearOverlay, chroniclerBusy, onChroniclerChange, abortChronicler } from '../../chronicler.js';
 import { getState, LIMITS } from '../../state.js';
@@ -294,6 +294,18 @@ export function renderActors(root, app, params = {}) {
             catch (err) { toast('error', err.message); } finally { npcBtn.disabled = false; setProgress(''); }
         } });
 
+        const canons = getSettings().canons || [];
+        const canonSel = canons.length ? select([{ value: '', label: '从原著提炼…' }, ...canons.map(c => ({ value: c.id, label: `《${c.name}》` }))]) : null;
+        canonSel?.addEventListener('change', async () => {
+            const canon = canons.find(c => c.id === canonSel.value); canonSel.value = '';
+            if (!canon) return;
+            const nm = nameIn.value.trim() || await promptDialog('从原著提炼', `《${canon.name}》里的人物名`);
+            if (!nm) return;
+            nameIn.value = nm; a.name = nm; a.sheet.origin = 'crossover'; a.sheet.source = canon.name; originSel.value = 'crossover'; sourceIn.value = canon.name; sourceField.hidden = false;
+            canonSel.disabled = true;
+            try { applySheet(await extractFromCanon({ name: nm, canon, hints: tas.personality.value.trim(), connectionId: a.connectionId, onProgress: setProgress })); toast('success', `已从《${canon.name}》提炼「${nm}」`); }
+            catch (err) { toast('error', err.message); } finally { canonSel.disabled = false; setProgress(''); }
+        });
         const saveBtn = button('保存演员', { icon: 'check', kind: 'primary', onClick: () => {
             a.name = nameIn.value.trim();
             if (!a.name) { toast('warning', '名字不能为空'); return; }
@@ -316,7 +328,7 @@ export function renderActors(root, app, params = {}) {
                 ),
                 h('section', { class: 'pa-card' },
                     h('div', { class: 'pa-section-title' }, icon('wand-magic-sparkles'), ' 工坊'),
-                    h('div', { class: 'pa-row pa-wrap' }, genBtn, useSearch, charSel, npcBtn),
+                    h('div', { class: 'pa-row pa-wrap' }, genBtn, useSearch, charSel, canonSel, npcBtn),
                     progress,
                     h('div', { class: 'pa-field-hint' }, '一键生成会用演员自己的连接（或设置里指定的工坊连接）写出下面各项；已有内容会被覆盖。'),
                 ),

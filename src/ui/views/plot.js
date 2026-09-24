@@ -3,7 +3,7 @@
 import { h, add, clear, button, icon, toggle, toast, input, textarea, select, field, collapsible, confirmDialog, fmtTime, renderRich } from '../dom.js';
 import { getSettings, saveSettings, getCanon, upsertCanon } from '../../settings.js';
 import { getPlot, saveState } from '../../state.js';
-import { listLoreBooks, loadLoreEntries, summarizeText, canonFromLore, canonFromText, deleteCanon, readFileAsText, generateCompass, abortPlot, plotBusy, onPlotChange, compassToText, injectionText, applyInjection, clearCompass } from '../../plot.js';
+import { listLoreBooks, refreshLoreBooks, loadLoreEntries, summarizeText, canonFromLore, canonFromText, canonFromKnowledge, deleteCanon, readFileAsText, generateCompass, abortPlot, plotBusy, onPlotChange, compassToText, injectionText, applyInjection, clearCompass } from '../../plot.js';
 
 const CHANCE_CLS = { '高': 'pa-chip-ok', '中': 'pa-chip-warn', '低': '' };
 
@@ -13,7 +13,7 @@ export function renderPlot(root, app) {
     let loreBook = plot.loreBook || '';
     let loreEntries = [];
     let loreChecked = new Set(plot.loreUids || []);
-    let newMode = 'txt';
+    let newMode = 'knowledge';
 
     const canonSection = h('section', { class: 'pa-card pa-card-wide' });
     const notesSection = h('section', { class: 'pa-card pa-card-wide' });
@@ -39,12 +39,27 @@ export function renderPlot(root, app) {
             add(canonSection, collapsible(`梗概 · ${current.name}（${current.chunks || 0} 段提要 → ${current.digest.length} 字，可手改）`, h('div', {}, ta, h('div', { class: 'pa-row pa-wrap' }, save, del))));
         }
         // 新建
+        const MODE_META = { knowledge: ['wand-magic-sparkles', '同人：按作品名生成'], txt: ['file-lines', '导入 TXT 小说'], lore: ['book-atlas', '从世界书选条目'], manual: ['pen-nib', '手写梗概'] };
         const modes = h('div', { class: 'pa-row pa-wrap pa-seg' },
-            ['txt', 'lore', 'manual'].map(m => h('button', { type: 'button', class: `pa-chip pa-chip-btn ${newMode === m ? 'active' : ''}`, onClick: () => { newMode = m; renderCanon(); } },
-                icon(m === 'txt' ? 'file-lines' : m === 'lore' ? 'book-atlas' : 'pen-nib'), ' ', m === 'txt' ? '导入 TXT 小说' : m === 'lore' ? '从世界书选条目' : '手写梗概')),
+            Object.entries(MODE_META).map(([m, [ic, label]]) => h('button', { type: 'button', class: `pa-chip pa-chip-btn ${newMode === m ? 'active' : ''}`, onClick: () => { newMode = m; renderCanon(); } }, icon(ic), ' ', label)),
         );
         const box = h('div', { class: 'pa-newcanon' });
-        if (newMode === 'txt') {
+        if (newMode === 'knowledge') {
+            const nameIn = input({ placeholder: '作品名，例如：某某传 / 某某动漫 第一季' });
+            const hintIn = input({ placeholder: '可选：只到第几卷、以哪条线为主、忽略哪些设定…' });
+            const useSearch = toggle(true, () => {}, '联网搜索资料');
+            const go = button('生成原著梗概', { icon: 'wand-magic-sparkles', kind: 'primary small', onClick: async () => {
+                const name = nameIn.value.trim();
+                if (!name) { toast('warning', '先填作品名'); return; }
+                go.disabled = true;
+                try {
+                    const canon = await canonFromKnowledge({ name, hints: hintIn.value.trim(), useSearch: useSearch.querySelector('input').checked, onProgress: setProgress });
+                    plot.canonId = canon.id; saveState(); toast('success', `《${name}》梗概已生成${canon.searched ? '（含联网资料）' : '（凭模型知识）'}`); renderCanon();
+                } catch (err) { toast('error', err.message); } finally { go.disabled = false; setProgress(''); }
+            } });
+            add(box, field('作品', nameIn), field('补充说明', hintIn), h('div', { class: 'pa-row pa-wrap' }, go, useSearch, button('中止', { kind: 'ghost small', onClick: () => abortPlot() })),
+                h('div', { class: 'pa-field-hint' }, '写同人最省事的方式：知名作品直接凭模型知识写梗概，开联网可补最新资料；生成后记得看一眼、改掉不对的地方。'));
+        } else if (newMode === 'txt') {
             const nameIn = input({ placeholder: '原著名字，例如：某某传' });
             const fileIn = h('input', { type: 'file', accept: '.txt,text/plain', class: 'pa-input pa-file' });
             const info = h('div', { class: 'pa-field-hint' }, '支持 UTF-8 / GBK 编码；按段落切成约 6000 字一段逐段提要，再汇总成梗概。长篇（百万字）需要较长时间和较多 token。');
@@ -67,7 +82,12 @@ export function renderPlot(root, app) {
             add(box, field('名字', nameIn), field('TXT 文件', fileIn), info, h('div', { class: 'pa-row pa-wrap' }, go, button('中止', { kind: 'ghost small', onClick: () => abortPlot() })));
         } else if (newMode === 'lore') {
             const books = listLoreBooks();
-            const bookSel = select([{ value: '', label: '选择世界书…' }, ...books.map(b => ({ value: b.name, label: `${b.name}${b.bound ? '（' + b.bound + '绑定）' : ''}` }))], { value: loreBook });
+            const bookSel = select([{ value: '', label: books.length ? '选择世界书…' : '（没有读到世界书，点右侧刷新）' }, ...books.map(b => ({ value: b.name, label: `${b.name}${b.bound ? '（' + b.bound + '绑定）' : ''}` }))], { value: loreBook });
+            const refreshBtn = button('', { icon: 'rotate', kind: 'ghost small', title: '重新读取世界书列表', onClick: async () => {
+                refreshBtn.disabled = true;
+                try { const bs = await refreshLoreBooks(); toast(bs.length ? 'success' : 'warning', bs.length ? `读到 ${bs.length} 本世界书` : '酒馆没有返回任何世界书'); renderCanon(); }
+                catch (err) { toast('error', err.message); } finally { refreshBtn.disabled = false; }
+            } });
             const list = h('div', { class: 'pa-lore-list' });
             async function loadList() {
                 clear(list);
@@ -76,7 +96,7 @@ export function renderPlot(root, app) {
                 try {
                     loreEntries = await loadLoreEntries(loreBook);
                     clear(list);
-                    if (!loreEntries.length) add(list, h('div', { class: 'pa-muted pa-small' }, '这本世界书没有可用条目。'));
+                    if (!loreEntries.length) add(list, h('div', { class: 'pa-muted pa-small' }, '这本世界书没有内容非空的条目。'));
                     for (const e of loreEntries) {
                         const cb = h('input', { type: 'checkbox' });
                         cb.checked = loreChecked.has(e.uid);
@@ -106,7 +126,7 @@ export function renderPlot(root, app) {
                 plot.loreBook = loreBook; plot.loreUids = [...loreChecked]; saveState();
                 toast('success', `已附带 ${loreChecked.size} 条设定`); renderCanon();
             } });
-            add(box, field('世界书', bookSel), h('div', { class: 'pa-row pa-wrap' }, allBtn, noneBtn, h('span', { class: 'pa-muted pa-small' }, plot.loreUids?.length ? `当前附带：${plot.loreBook} · ${plot.loreUids.length} 条` : '')), list, field('名字', nameIn), h('div', { class: 'pa-row pa-wrap' }, asCanon, asLore));
+            add(box, field('世界书', h('div', { class: 'pa-row' }, bookSel, refreshBtn), books.length ? '' : '列表为空时通常是酒馆版本较旧或世界书尚未加载；刷新会直接向酒馆服务器要列表。'), h('div', { class: 'pa-row pa-wrap' }, allBtn, noneBtn, h('span', { class: 'pa-muted pa-small' }, plot.loreUids?.length ? `当前附带：${plot.loreBook} · ${plot.loreUids.length} 条` : '')), list, field('名字', nameIn), h('div', { class: 'pa-row pa-wrap' }, asCanon, asLore));
             if (loreBook) loadList();
         } else {
             const nameIn = input({ placeholder: '原著名字' });
@@ -142,7 +162,7 @@ export function renderPlot(root, app) {
         const head = h('div', { class: 'pa-stage-head' },
             h('div', { class: 'pa-stage-info' },
                 h('div', { class: 'pa-kicker' }, c ? `罗盘 · 第 ${plot.compassFloor} 楼时推演` : '罗盘 · 尚未推演'),
-                h('div', { class: 'pa-stage-meta' }, c ? `${fmtTime(plot.compassAt)} 生成${s2.plot.injectEnabled && plot.injectEnabled !== false ? ' · 已注入正文提示词' : ' · 未注入'}` : '读原著 + 舞台 + 备注，推演必然 / 脱离 / 不可能 / 可能 / 蝴蝶效应'),
+                h('div', { class: 'pa-stage-meta' }, c ? `${fmtTime(plot.compassAt)} 生成${s2.plot.injectEnabled && plot.injectEnabled !== false ? ' · 已注入正文提示词' : ' · 未注入'} · 读最近 ${s2.plot.contextFloors || 12} 层正文` : `读原著 + 最近 ${s2.plot.contextFloors || 12} 层正文 + 世界书 + 备注，推演必然 / 脱离 / 不可能 / 可能 / 蝴蝶效应 / 原著接下来的事`),
             ),
             h('div', { class: 'pa-stage-actions' },
                 busy ? button('中止', { icon: 'stop', kind: 'danger small', onClick: () => abortPlot() }) : null,
@@ -157,7 +177,10 @@ export function renderPlot(root, app) {
         depthIn.addEventListener('change', () => { s2.plot.injectDepth = Math.max(0, Number(depthIn.value) || 0); saveSettings(); applyInjection(); });
         const roleSel = select([{ value: '0', label: 'system' }, { value: '1', label: 'user' }, { value: '2', label: 'assistant' }], { value: String(s2.plot.injectRole || 0) });
         roleSel.addEventListener('change', () => { s2.plot.injectRole = Number(roleSel.value); saveSettings(); applyInjection(); });
+        const floorsIn = input({ type: 'number', min: 1, max: 60, value: s2.plot.contextFloors || 12, class: 'pa-input pa-input-num' });
+        floorsIn.addEventListener('change', () => { s2.plot.contextFloors = Math.max(1, Math.min(60, Number(floorsIn.value) || 12)); saveSettings(); });
         const controls = h('div', { class: 'pa-row pa-wrap pa-compass-controls' },
+            field('读最近几层正文', floorsIn),
             field('自动推演', autoSel),
             toggle(s2.plot.injectEnabled && plot.injectEnabled !== false, (v) => { s2.plot.injectEnabled = v; plot.injectEnabled = v; saveSettings(); saveState(); applyInjection(); renderCompass(); }, '注入正文提示词'),
             field('注入深度', depthIn, '0 = 最后一条消息之后'),
@@ -177,6 +200,8 @@ export function renderPlot(root, app) {
             compassCard('impossible', '已不可能发生', 'ban', h('ul', {}, (c.impossible || []).map(x => h('li', {}, x)), !c.impossible?.length ? h('li', { class: 'pa-muted' }, '（无）') : null)),
             compassCard('possible', '可能发生', 'dice', h('ul', {}, (c.possible || []).map(p => h('li', {}, h('span', { class: `pa-chip ${CHANCE_CLS[p.chance] || ''}` }, p.chance || '？'), ' ', p.what || '', p.trigger ? h('div', { class: 'pa-small pa-muted' }, '触发：', p.trigger) : null)), !c.possible?.length ? h('li', { class: 'pa-muted' }, '（无）') : null)),
             compassCard('butterflies', '蝴蝶效应', 'wind', h('ul', {}, (c.butterflies || []).map(b => h('li', {}, h('b', {}, b.origin || ''), h('div', { class: 'pa-chain' }, (b.chain || []).map(x => h('span', { class: 'pa-chain-step' }, x))), b.outcome ? h('div', { class: 'pa-small' }, '⇒ ', b.outcome) : null)), !c.butterflies?.length ? h('li', { class: 'pa-muted' }, '（无）') : null)),
+            compassCard('canon', '原著接下来的事', 'timeline', h('ul', {}, (c.canonAhead || []).map(e => h('li', {}, h('span', { class: `pa-chip ${/如期|提前/.test(e.status || '') ? 'pa-chip-ok' : /不可能/.test(e.status || '') ? 'pa-chip-bad' : 'pa-chip-warn'}` }, e.status || '？'), ' ', e.event || '', e.why ? h('div', { class: 'pa-small pa-muted' }, e.why) : null)), !c.canonAhead?.length ? h('li', { class: 'pa-muted' }, '（无原著或无内容）') : null)),
+            compassCard('ooc', 'OOC 提醒', 'user-shield', h('ul', {}, (c.oocRisks || []).map(x => h('li', {}, x)), !c.oocRisks?.length ? h('li', { class: 'pa-muted' }, '（无）') : null)),
             compassCard('beats', '接下来的节拍', 'music', h('ol', {}, (c.beats || []).map(x => h('li', {}, x)))),
         );
         const guidanceTa = textarea({ value: plot.guidanceOverride || c.guidance || '', rows: 4 });

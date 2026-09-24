@@ -2,7 +2,7 @@
 
 import { getSettings, getConnection } from './settings.js';
 import { resolveConnection, sendChat, readSecretState } from './connections.js';
-import { buildSheetGenerationMessages, buildNpcExtractionMessages } from './prompts.js';
+import { buildSheetGenerationMessages, buildNpcExtractionMessages, buildCanonCharacterMessages } from './prompts.js';
 import { extractJson, stripThinking } from './llm.js';
 import { collectStage } from './stage.js';
 
@@ -180,6 +180,15 @@ export async function extractNpcSheet({ npcName, connectionId, onProgress }) {
     const stage = await collectStage({ ...getSettings(), contextFloors: 20, includeWorldInfo: true });
     onProgress?.('正在提炼人设…');
     const messages = buildNpcExtractionMessages({ npcName, stage });
+    const { content } = await sendChat({ ...conn, stream: false }, messages, { maxTokens: 1200, temperature: 0.7 });
+    return parseSheetJson(content);
+}
+
+/** 从原著梗概提炼一个人物的人设（同人）。 */
+export async function extractFromCanon({ name, canon, hints, connectionId, onProgress }) {
+    const conn = workshopConnection(connectionId);
+    onProgress?.('正在从原著提炼人设…');
+    const messages = buildCanonCharacterMessages({ name, canonName: canon.name, digest: String(canon.digest || '').slice(0, 9000), hints });
     const { content } = await sendChat({ ...conn, stream: false }, messages, { maxTokens: 1200, temperature: 0.7 });
     return parseSheetJson(content);
 }
