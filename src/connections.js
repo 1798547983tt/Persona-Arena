@@ -225,9 +225,11 @@ export function getProfile(id) {
 /**
  * 发送一次对话补全。返回 { content, reasoning }。stream 时通过 onToken(cumulativeText) 回调。
  */
-export async function sendChat(conn, messages, { maxTokens, temperature, signal, onToken, noJailbreak = false } = {}) {
+export async function sendChat(conn, messages, { maxTokens, temperature, signal, onToken, noJailbreak = false, task = 'roleplay' } = {}) {
     const c = ctx();
-    messages = withJailbreak(messages, { skip: noJailbreak });
+    // 破限默认只用于扮演类调用（行动/沙龙/私语）；工坊/罗盘/史官等要求 JSON 的任务默认不带，避免破限的"身份不动"指令压过格式要求。
+    const applyJb = !noJailbreak && (task !== 'tool' || getSettings().jailbreak.applyToTools === true);
+    messages = withJailbreak(messages, { skip: !applyJb });
     const stream = !!conn.stream && typeof onToken === 'function';
     const max_tokens = Number(maxTokens ?? conn.maxTokens ?? 800);
     const temp = temperature ?? conn.temperature;
@@ -236,7 +238,10 @@ export async function sendChat(conn, messages, { maxTokens, temperature, signal,
         const svc = c.ConnectionManagerRequestService;
         if (!svc) throw new Error('酒馆的连接管理器不可用');
         if (!conn.profileId) throw new Error('未选择连接配置');
-        const result = await svc.sendRequest(conn.profileId, messages, max_tokens, { stream, signal, extractData: true });
+        // 不带连接配置里的预设（避免预设的采样/系统参数干扰），采样参数由这里给出
+        const override = {};
+        if (temp !== undefined && temp !== null && temp !== '') override.temperature = Number(temp);
+        const result = await svc.sendRequest(conn.profileId, messages, max_tokens, { stream, signal, extractData: true, includePreset: false, includeInstruct: true }, override);
         return await consume(result, stream, onToken);
     }
 
@@ -284,7 +289,7 @@ export async function testConnection(conn) {
     const { content } = await sendChat(
         { ...conn, stream: false },
         [{ role: 'user', content: '请只回复四个字：连接成功' }],
-        { maxTokens: 32, noJailbreak: true },
+        { maxTokens: 32, noJailbreak: true, task: 'tool' },
     );
     return String(content || '').trim().slice(0, 80);
 }

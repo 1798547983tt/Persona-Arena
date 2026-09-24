@@ -1,3 +1,4 @@
+import { JSON_ONLY_RULE } from './llm.js';
 // 提示词：性格预设、行动/沙龙/私语/人设生成的消息构造。
 
 export const PERSONALITY_PRESETS = Object.freeze([
@@ -222,7 +223,7 @@ export function buildWhisperMessages({ actor, state, history, text, asInstructio
 const SHEET_SCHEMA = `{"personality":"性格，150字内","appearance":"外貌，80字内","backstory":"经历/背景，200字内","voice":"口吻、口癖、说话习惯，80字内","bottomLines":"绝不做的事，60字内","goals":"长期目标，60字内","emoji":"一个最像TA的emoji"}`;
 
 export function buildSheetGenerationMessages({ name, source, hints, searchDigest, origin }) {
-    const sys = `你是资深的角色设定编辑。根据给定信息，写出一份可直接用于即兴剧演员的人设卡。要求：准确（有原作就忠于原作）、具体（可演出来的细节，而非空洞形容词）、有棱角（写出矛盾与底线）。只输出一个 JSON 对象，不要前后缀、不要代码块。字段：${SHEET_SCHEMA}`;
+    const sys = `你是资深的角色设定编辑。根据给定信息，写出一份可直接用于即兴剧演员的人设卡。要求：准确（有原作就忠于原作）、具体（可演出来的细节，而非空洞形容词）、有棱角（写出矛盾与底线）。只输出一个 JSON 对象，不要前后缀、不要代码块。字段：${SHEET_SCHEMA}\n${JSON_ONLY_RULE}`;
     const user = [
         `人物：${name}`,
         origin === 'crossover' && source ? `来源作品：《${source}》。这个人物会以原本的人格与记忆进入另一个故事（魂穿/身穿），人设卡要写清 TA 原本是谁、有什么执念与习惯。` : '',
@@ -237,7 +238,7 @@ export function buildSheetGenerationMessages({ name, source, hints, searchDigest
 }
 
 export function buildNpcExtractionMessages({ npcName, stage }) {
-    const sys = `你是资深的角色设定编辑。从舞台记录与世界书中提炼名叫「${npcName}」的人物，写成一份即兴剧演员可用的人设卡。没有的信息可以基于已有线索合理补全，但不要与记录冲突。只输出一个 JSON 对象，不要代码块。字段：${SHEET_SCHEMA}`;
+    const sys = `你是资深的角色设定编辑。从舞台记录与世界书中提炼名叫「${npcName}」的人物，写成一份即兴剧演员可用的人设卡。没有的信息可以基于已有线索合理补全，但不要与记录冲突。只输出一个 JSON 对象，不要代码块。字段：${SHEET_SCHEMA}\n${JSON_ONLY_RULE}`;
     const user = [
         stage.loreText ? `【世界书】\n${stage.loreText}` : '',
         `【舞台记录】\n${(stage.floors || []).map(f => `${f.name}：${f.text}`).join('\n\n')}`,
@@ -299,7 +300,8 @@ export function buildCompassMessages({ canonName, canonDigest, loreText, stage, 
 - 引导（guidance）写给正文 AI 看：具体、可执行、不剧透式地点明，尊重人物动机与已成立的事实。
 ${canonDigest ? '有原著时，以原著逻辑为基准；' : '没有原著时，以故事内已成立的事实、人物动机与世界规则为基准；'}导演备注优先级最高。
 只输出一个 JSON 对象（不要代码块、不要前后缀），字段与含义：${COMPASS_SCHEMA_TEXT}
-所有值用中文。`;
+所有值用中文。
+${JSON_ONLY_RULE}`;
     const user = [
         canonDigest ? `【原著梗概：《${canonName || '原著'}》】\n${canonDigest}` : '【原著】无。这是自由剧情。',
         loreText ? `【世界书 / 设定】\n${loreText}` : '',
@@ -325,7 +327,8 @@ export function buildChroniclerMessages({ actors, npcs, floor, prior, fields, pl
 - 人设变化只写"这一楼新出现的"，用一句话，不复述旧设定；
 - 只允许更新这些字段：${enabled.join('、') || '（无）'}；其它字段留空或省略；
 - 对象名（bonds.target）用故事里的称呼；演员名必须与给定名字完全一致。
-只输出一个 JSON 对象（不要代码块），格式：${CHRONICLER_SCHEMA_TEXT}`;
+只输出一个 JSON 对象（不要代码块），格式：${CHRONICLER_SCHEMA_TEXT}
+${JSON_ONLY_RULE}`;
     const roster = actors.map(({ actor, state }) => `## ${actor.name}\n${sheetText(actor, state)}\n${panelText(actor, state)}`).join('\n\n');
     const user = [
         `【演员名单与当前状态】\n${roster}`,
@@ -359,7 +362,7 @@ export function buildCanonFromKnowledgeMessages({ name, hints, sources, maxChars
 }
 
 export function buildCanonCharacterMessages({ name, canonName, digest, hints }) {
-    const sys = `你是资深的角色设定编辑。根据《${canonName}》的原著梗概（以及你对这部作品的了解），为人物「${name}」写一份可直接用于即兴剧演员的人设卡：忠于原著，具体到口癖、习惯动作、价值观与底线，写出矛盾与执念；梗概里没写到的细节可凭你对原作的知识补全，但不要与梗概冲突。只输出一个 JSON 对象，不要代码块。字段：${SHEET_SCHEMA}`;
+    const sys = `你是资深的角色设定编辑。根据《${canonName}》的原著梗概（以及你对这部作品的了解），为人物「${name}」写一份可直接用于即兴剧演员的人设卡：忠于原著，具体到口癖、习惯动作、价值观与底线，写出矛盾与执念；梗概里没写到的细节可凭你对原作的知识补全，但不要与梗概冲突。只输出一个 JSON 对象，不要代码块。字段：${SHEET_SCHEMA}\n${JSON_ONLY_RULE}`;
     const user = [
         `【原著梗概】\n${digest}`,
         hints ? `额外要求：${hints}` : '',

@@ -247,7 +247,8 @@ export function renderSettings(root, app, params = {}) {
         const entries = listJailbreakEntries();
         add(jbSection,
             h('div', { class: 'pa-section-title' }, icon('unlock-keyhole'), ' 破限提示词'),
-            toggle(jb.enabled, (v) => { jb.enabled = v; saveSettings(); renderJailbreak(); }, '启用：作为所有插件调用的最顶端 system 提示'),
+            toggle(jb.enabled, (v) => { jb.enabled = v; saveSettings(); renderJailbreak(); }, '启用：作为扮演类调用（行动 / 沙龙 / 私语）的最顶端 system 提示'),
+            toggle(jb.applyToTools === true, (v) => { jb.applyToTools = v; saveSettings(); }, '工坊 / 罗盘 / 史官也带破限（这些任务要求只输出 JSON，破限可能让模型改用叙述，默认关）'),
             h('div', { class: 'pa-field-hint' }, `来源：${jb.source === 'custom' ? `自定义预设「${jb.customName || '未命名'}」` : `内置预设「${bundledPresetName()}」`}。只取预设里「破限」区的条目；输出格式契约不受影响（会附一句桥接说明）。`),
         );
         const list = h('div', { class: 'pa-jb-list' });

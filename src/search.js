@@ -3,7 +3,7 @@
 import { getSettings, getConnection } from './settings.js';
 import { resolveConnection, sendChat, readSecretState } from './connections.js';
 import { buildSheetGenerationMessages, buildNpcExtractionMessages, buildCanonCharacterMessages } from './prompts.js';
-import { extractJson, stripThinking } from './llm.js';
+import { requestJson } from './llm.js';
 import { collectStage } from './stage.js';
 
 function ctx() { return SillyTavern.getContext(); }
@@ -131,8 +131,9 @@ function workshopConnection(preferId) {
     return getConnection(preferId) || getConnection(s.workshopConnectionId) || resolveConnection();
 }
 
-function parseSheetJson(content) {
-    const obj = extractJson(stripThinking(content));
+const SHEET_KEYS = ['personality', 'appearance', 'backstory', 'voice', 'bottomLines', 'goals'];
+
+function normalizeSheet(obj) {
     if (!obj || typeof obj !== 'object') throw new Error('模型没有返回可解析的人设 JSON');
     const pick = (k, n) => String(obj[k] ?? '').trim().slice(0, n);
     return {
@@ -142,8 +143,14 @@ function parseSheetJson(content) {
         voice: pick('voice', 300),
         bottomLines: pick('bottomLines', 200),
         goals: pick('goals', 200),
+        abilities: pick('abilities', 300),
         emoji: pick('emoji', 4) || '🎭',
     };
+}
+
+async function sheetRequest(conn, messages, { maxTokens = 1200, temperature = 0.8 } = {}) {
+    const send = (msgs) => sendChat({ ...conn, stream: false }, msgs, { maxTokens, temperature, task: 'tool' });
+    return normalizeSheet(await requestJson(send, messages, { keys: SHEET_KEYS, label: '人设 JSON' }));
 }
 
 /**
@@ -169,8 +176,7 @@ export async function generateSheet({ name, source, hints, origin, useSearch, co
     }
     onProgress?.('正在撰写人设卡…');
     const messages = buildSheetGenerationMessages({ name, source, hints, searchDigest: digest, origin });
-    const { content } = await sendChat({ ...conn, stream: false }, messages, { maxTokens: 1200, temperature: 0.8 });
-    return { sheet: parseSheetJson(content), searched };
+    return { sheet: await sheetRequest(conn, messages), searched };
 }
 
 /** 从当前舞台提炼一个 NPC 的人设。 */
@@ -180,8 +186,7 @@ export async function extractNpcSheet({ npcName, connectionId, onProgress }) {
     const stage = await collectStage({ ...getSettings(), contextFloors: 20, includeWorldInfo: true });
     onProgress?.('正在提炼人设…');
     const messages = buildNpcExtractionMessages({ npcName, stage });
-    const { content } = await sendChat({ ...conn, stream: false }, messages, { maxTokens: 1200, temperature: 0.7 });
-    return parseSheetJson(content);
+    return await sheetRequest(conn, messages, { temperature: 0.7 });
 }
 
 /** 从原著梗概提炼一个人物的人设（同人）。 */
@@ -189,8 +194,7 @@ export async function extractFromCanon({ name, canon, hints, connectionId, onPro
     const conn = workshopConnection(connectionId);
     onProgress?.('正在从原著提炼人设…');
     const messages = buildCanonCharacterMessages({ name, canonName: canon.name, digest: String(canon.digest || '').slice(0, 9000), hints });
-    const { content } = await sendChat({ ...conn, stream: false }, messages, { maxTokens: 1200, temperature: 0.7 });
-    return parseSheetJson(content);
+    return await sheetRequest(conn, messages, { temperature: 0.7 });
 }
 
 /** 从酒馆角色卡导入。 */

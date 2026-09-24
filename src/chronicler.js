@@ -4,7 +4,7 @@ import { getSettings, saveSettings, getConnection, getActor, uid } from './setti
 import { getState, saveState, activeActors, getActorState, applyStateUpdate, applyAbilityUpdate, appendOverlay, snapshotActorStates, restoreActorStates, pushChronicleLog, upsertNpc } from './state.js';
 import { resolveConnection, sendChat } from './connections.js';
 import { buildChroniclerMessages } from './prompts.js';
-import { extractJson, stripThinking, describeError } from './llm.js';
+import { describeError, requestJson } from './llm.js';
 import { plotFeedForActors } from './plot.js';
 
 const listeners = new Set();
@@ -81,8 +81,9 @@ export async function recordFloor({ messageId, manual = false, onProgress } = {}
             fields: s.chronicler.fields, plotBeats: plotFeedForActors(),
         });
         const conn = { ...chroniclerConnection(), stream: false };
-        const { content } = await sendChat(conn, messages, { maxTokens: 1800, temperature: 0.3, signal: controller.signal });
-        const json = extractJson(stripThinking(content));
+        const sig = controller.signal;
+        const send = (msgs) => sendChat(conn, msgs, { maxTokens: 1800, temperature: 0.3, signal: sig, task: 'tool' });
+        const json = await requestJson(send, messages, { keys: ['summary', 'actors'], label: '史官 JSON' });
         if (!json || typeof json !== 'object') throw new Error('史官没有返回可解析的 JSON');
         if (ctx().chatId !== chatId) throw new Error('聊天已切换，本次记录作废');
         const snapshot = snapshotActorStates();

@@ -5,7 +5,7 @@ import { getState, getPlot, saveState, LIMITS, activeActors, getActorState } fro
 import { resolveConnection, sendChat } from './connections.js';
 import { collectStage } from './stage.js';
 import { buildChunkSummaryMessages, buildDigestMessages, buildMergeSummariesMessages, buildCompassMessages } from './prompts.js';
-import { extractJson, stripThinking, describeError } from './llm.js';
+import { extractJson, stripThinking, describeError, requestJson } from './llm.js';
 
 const INJECT_KEY = 'PERSONA_ARENA_PLOT';
 const listeners = new Set();
@@ -118,7 +118,7 @@ export function splitChunks(text, size) {
 
 async function llm(messages, { maxTokens, temperature, signal }) {
     const conn = { ...plotConnection(), stream: false };
-    const { content } = await sendChat(conn, messages, { maxTokens, temperature, signal });
+    const { content } = await sendChat(conn, messages, { maxTokens, temperature, signal, task: 'tool' });
     return stripThinking(content).trim();
 }
 
@@ -378,8 +378,9 @@ export async function generateCompass({ onProgress, signal } = {}) {
             notes: plot.notes, previous: plot.compass ? compassToText(plot.compass, { brief: true }) : '',
             actorsBrief: actorsBrief(), npcsBrief: npcs.map(n => `- ${n.name}${n.role ? '（' + n.role + '）' : ''}`).join('\n'),
         });
-        const raw = await llm(messages, { maxTokens: 2200, temperature: 0.6, signal: sig });
-        const compass = normalizeCompass(extractJson(raw));
+        const conn = { ...plotConnection(), stream: false };
+        const send = (msgs) => sendChat(conn, msgs, { maxTokens: 2200, temperature: 0.6, signal: sig, task: 'tool' });
+        const compass = normalizeCompass(await requestJson(send, messages, { keys: ['now', 'inevitable', 'beats', 'guidance'], label: '走向 JSON' }));
         if (!compass || (!compass.guidance && !compass.beats.length && !compass.now)) throw new Error('模型没有返回可解析的走向 JSON');
         if (ctx().chatId !== chatId) throw new Error('聊天已切换，本次推演作废');
         if (plot.compass) {

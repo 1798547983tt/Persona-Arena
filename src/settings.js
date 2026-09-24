@@ -76,6 +76,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     },
     jailbreak: {
         enabled: false,       // 玩家自己开关
+        applyToTools: false,  // 工坊/罗盘/史官（要求 JSON 的任务）是否也带破限
         source: 'bundled',    // bundled | custom
         bundledOn: {},        // 内置条目开关覆盖 { id: bool }
         custom: [],           // 从自己预设提取的条目 [{ id, name, content, on }]
