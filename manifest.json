@@ -1,0 +1,13 @@
+{
+    "display_name": "Persona Arena · 人格竞技场",
+    "loading_order": 120,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "1798547983tt",
+    "version": "0.1.0",
+    "homePage": "https://github.com/1798547983tt/Persona-Arena",
+    "auto_update": false,
+    "minimum_client_version": "1.13.0"
+}

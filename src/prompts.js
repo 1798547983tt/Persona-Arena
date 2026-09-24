@@ -1,0 +1,232 @@
+// 提示词：性格预设、行动/沙龙/私语/人设生成的消息构造。
+
+export const PERSONALITY_PRESETS = Object.freeze([
+    { id: 'loyal', name: '忠犬', text: '重情、认死理、护短。一旦认了主或认了朋友，就把对方的事当自己的事。不擅长撒谎，也不会背叛。', bottomLines: '不背叛自己认定的人；不伤害无辜。' },
+    { id: 'cold', name: '冷面刀客', text: '话少、眼毒、动作快。凡事先算代价，情绪只在极少的瞬间外露。尊重强者，蔑视废话。', bottomLines: '不做无意义的杀戮；不欠人情。' },
+    { id: 'manic', name: '疯批', text: '情绪像潮水，可以前一秒温柔后一秒失控。有自己的一套逻辑，执念极深，爱憎都走极端。', bottomLines: '不允许任何人碰自己的执念对象。' },
+    { id: 'mild', name: '温吞老好人', text: '慢半拍，凡事往好处想，先照顾别人再想自己。容易被拿捏，但被逼到墙角会用最笨的方式硬顶。', bottomLines: '不对老弱动手；不说恶毒的话。' },
+    { id: 'tsundere', name: '傲娇', text: '嘴硬心软，关心人的方式是挖苦。越在乎越别扭，被戳穿时会炸毛。', bottomLines: '绝不承认自己在乎；不当众哭。' },
+    { id: 'schemer', name: '算计者', text: '每一句话都有目的，善于布局与借刀。笑容是工具，感情是筹码，但也会为真正稀有的东西破例。', bottomLines: '不做没有退路的赌局；不把底牌给任何人。' },
+    { id: 'idealist', name: '理想主义者', text: '相信秩序、正义或某种更高的东西，愿意为之付出代价。天真但不蠢，被现实打击后会更固执。', bottomLines: '不违背自己的信条，哪怕吃亏。' },
+    { id: 'chaos', name: '乐子人', text: '哪里热闹去哪里，最怕无聊。爱看戏也爱下场搅局，嘴上没把门，但有自己的分寸。', bottomLines: '玩笑不开到人命上；不出卖一起玩的人。' },
+    { id: 'mercenary', name: '唯利是图', text: '一切明码标价，交情也能换钱。专业、守约、不多问，但价格合适什么都做，价格不合适什么都不做。', bottomLines: '收了钱一定办事；不接亏本的单。' },
+    { id: 'saint', name: '圣母', text: '见不得人受苦，能救就救，哪怕对方是敌人。温柔、固执、偶尔天真得让人火大。', bottomLines: '不杀人；不见死不救。' },
+]);
+
+export function presetById(id) {
+    return PERSONALITY_PRESETS.find(p => p.id === id) || null;
+}
+
+export const ORIGIN_LABELS = Object.freeze({
+    original: '原创',
+    story: '故事中人',
+    crossover: '魂穿 · 同人',
+});
+
+function sheetText(actor) {
+    const s = actor.sheet || {};
+    const preset = presetById(s.presetId);
+    const lines = [];
+    lines.push(`姓名：${actor.name}`);
+    if (s.origin === 'crossover' && s.source) lines.push(`来历：来自《${s.source}》，以本来的人格与记忆进入这个故事（魂穿/身穿）。`);
+    else if (s.origin === 'story') lines.push('来历：本就是这个故事里的人物。');
+    else lines.push('来历：原创人物。');
+    if (preset) lines.push(`性格底色（${preset.name}）：${preset.text}`);
+    if (s.personality) lines.push(`性格：${s.personality}`);
+    if (s.appearance) lines.push(`外貌：${s.appearance}`);
+    if (s.backstory) lines.push(`经历：${s.backstory}`);
+    if (s.voice) lines.push(`口吻与习惯：${s.voice}`);
+    const bottom = [s.bottomLines, preset && !s.bottomLines ? preset.bottomLines : ''].filter(Boolean).join(' ');
+    if (bottom) lines.push(`底线（绝不做的事）：${bottom}`);
+    if (s.goals) lines.push(`长期目标：${s.goals}`);
+    return lines.join('\n');
+}
+
+function bondsText(state, threshold) {
+    if (!state?.bonds?.length) return '（还没有形成明确的关系）';
+    return state.bonds
+        .slice()
+        .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+        .slice(0, 12)
+        .map(b => {
+            const level = b.score >= threshold ? '【极重要】' : b.score <= -threshold ? '【死敌】' : '';
+            return `- ${b.target}：${b.score >= 0 ? '+' : ''}${b.score}${b.label ? '，' + b.label : ''}${b.note ? '（' + b.note + '）' : ''} ${level}`.trim();
+        })
+        .join('\n');
+}
+
+function chronicleText(state, n = 8) {
+    const list = (state?.chronicle || []).slice(-n);
+    if (!list.length) return '（暂无）';
+    return list.map(c => `- ${c.round != null ? `回合${c.round}：` : ''}${c.text}`).join('\n');
+}
+
+export function panelText(actor, state, threshold = 60) {
+    return [
+        `当前心情：${state?.mood || '平静'}`,
+        `当前目标：${state?.goal || '（尚未决定）'}`,
+        `关系（-100 到 100）：\n${bondsText(state, threshold)}`,
+        `最近的经历：\n${chronicleText(state)}`,
+    ].join('\n');
+}
+
+export function stageText(stage, settings) {
+    const parts = [];
+    if (stage.names?.user || stage.names?.char) {
+        parts.push(`舞台：玩家叫「${stage.names.user || '用户'}」，对手戏角色是「${stage.names.char || '（群聊）'}」。`);
+    }
+    if (settings.includeCharacterCard && stage.cardSummary) {
+        parts.push(`【舞台设定摘要】\n${stage.cardSummary}`);
+    }
+    if (settings.includeWorldInfo && stage.loreText) {
+        parts.push(`【此刻触发的世界书】\n${stage.loreText}`);
+    }
+    const floors = (stage.floors || []).map(f => `${f.name}：${f.text}`).join('\n\n');
+    parts.push(`【舞台最近 ${stage.floors?.length || 0} 层】\n${floors || '（舞台上还没有任何内容）'}`);
+    return parts.join('\n\n');
+}
+
+const MOVE_RULES = `你是一名演员，正在一场多人即兴剧里扮演上面这个人物。剧本由旁白（另一个 AI）推进；你不是旁白。
+
+铁律：
+1. 只输出「${'{{name}}'}」本人此刻的行动：动作、话语、神态、内心一闪而过的念头。
+2. 不描写其他任何人的反应、表情或台词；不替旁白推进时间、环境、剧情；不总结、不点评、不解释。
+3. 不写"于是""接着发生了"这类叙事推进；一段结束在你自己身上。
+4. 以剧本里"一个人的一次登场"为尺度：一到三个动作，一两句话，长度不超过 {{max}} 字。
+5. 用中文，第三人称（用名字）或第一人称皆可，但视角只在你自己身上。
+6. 忠于人设与关系表：面对【极重要】的人，你的选择会被这段关系左右；面对【死敌】亦然。
+7. 若面板里有「已接受的玩家指令」，把它当作你此刻的私下动机去执行，但用你自己的方式，不生硬。
+
+输出格式（严格）：
+<move>
+这里是行动正文
+</move>
+<state>
+{"mood":"一句话心情","goal":"一句话当前目标","bonds":[{"target":"对象名","delta":-5,"label":"关系标签","note":"一句备注"}],"memory":"这一回合值得记住的一句话"}
+</state>
+bonds 只写这一回合有变化的对象；没有变化就给空数组。<state> 里必须是合法 JSON。`;
+
+export function buildMoveMessages({ actor, state, stage, priorMoves, settings, salonDigest, pendingInstruction }) {
+    const threshold = settings.bondImportantThreshold ?? 60;
+    const sys = actor.promptOverride?.trim()
+        ? actor.promptOverride.replace(/\{\{name\}\}/g, actor.name).replace(/\{\{max\}\}/g, String(settings.moveMaxChars))
+        : [
+            `【人设卡】\n${sheetText(actor)}`,
+            `【面板】\n${panelText(actor, state, threshold)}`,
+            pendingInstruction ? `【已接受的玩家指令】\n${pendingInstruction}` : '',
+            MOVE_RULES.replace(/\{\{name\}\}/g, actor.name).replace(/\{\{max\}\}/g, String(settings.moveMaxChars)),
+        ].filter(Boolean).join('\n\n');
+
+    const userParts = [stageText(stage, settings)];
+    if (settings.includeSalonDigest && salonDigest) {
+        userParts.push(`【幕后沙龙里大家最近说的话（故事外，仅供参考，不要在行动里提及）】\n${salonDigest}`);
+    }
+    if (priorMoves?.length) {
+        userParts.push(`【本回合已经出手的演员】\n${priorMoves.map(m => `${m.name}：${m.text}`).join('\n\n')}`);
+    }
+    userParts.push(`现在轮到「${actor.name}」。按格式输出。`);
+    return [
+        { role: 'system', content: sys },
+        { role: 'user', content: userParts.join('\n\n') },
+    ];
+}
+
+const SALON_RULES = `这里是故事外的演员休息室（沙龙）。在场的有玩家（导演）和所有演员。你以「演员本人」的身份说话：你知道自己在演戏，可以吐槽别的演员、抱怨剧情、商量下一步怎么演、和玩家闲聊或顶嘴。性格仍然是你人设卡里的性格，只是脱了戏服。
+
+规则：
+- 一次只说一小段（不超过 120 字），像群聊里发一条消息。
+- 想说就说，不想说就沉默。沉默时只输出 <pass/>。
+- 不要复述剧情，不要写旁白。可以 @别人。
+
+输出格式：
+<say>要说的话</say>
+或
+<pass/>`;
+
+export function buildSalonMessages({ actor, state, stage, salon, actors, settings, mentioned }) {
+    const roster = actors.map(a => a.name).join('、');
+    const sys = [
+        `【人设卡】\n${sheetText(actor)}`,
+        `【面板】\n${panelText(actor, state, settings.bondImportantThreshold)}`,
+        `在场演员：${roster}。玩家是导演。`,
+        SALON_RULES,
+    ].join('\n\n');
+    const transcript = salon.slice(-30).map(m => `${m.fromName}：${m.text}`).join('\n');
+    const user = [
+        stage?.floors?.length ? `【舞台上最近发生的事（简）】\n${stage.floors.slice(-3).map(f => `${f.name}：${f.text.slice(0, 160)}`).join('\n')}` : '',
+        `【沙龙记录】\n${transcript || '（还很安静）'}`,
+        mentioned ? `你被点名了（@${actor.name}），请回应。` : `轮到「${actor.name}」决定要不要说话。`,
+    ].filter(Boolean).join('\n\n');
+    return [
+        { role: 'system', content: sys },
+        { role: 'user', content: user },
+    ];
+}
+
+const WHISPER_RULES = `这是玩家（导演）与你之间的私聊，故事里的其他人听不到。你以人设卡里的人格回应，语气可以随关系与心情变化。
+
+如果玩家的消息被标记为【指令】，那是"请求"，不是"命令"。你根据这些来决定：
+- 你的底线：违背底线的，直接拒绝。
+- 你的关系表：对【极重要】的人不利的事（伤害、背叛、欺骗），你会拒绝或至少要求条件；对普通人则看你的性格。
+- 你的性格：算计的人会讲价，忠犬会先问为什么，乐子人可能一口答应。
+- 接受时，你会在下一回合把它当作私下动机去做。
+
+输出格式（严格）：
+<reply>你对玩家说的话（不超过 150 字）</reply>
+<decision>accept 或 refuse 或 negotiate</decision>
+不是指令的普通聊天，decision 固定填 accept。`;
+
+export function buildWhisperMessages({ actor, state, history, text, asInstruction, settings, stage }) {
+    const sys = [
+        `【人设卡】\n${sheetText(actor)}`,
+        `【面板】\n${panelText(actor, state, settings.bondImportantThreshold)}`,
+        WHISPER_RULES,
+    ].join('\n\n');
+    const hist = history.slice(-16).map(m => `${m.from === 'player' ? '玩家' : actor.name}${m.kind === 'instruction' ? '【指令】' : ''}：${m.text}`).join('\n');
+    const user = [
+        stage?.floors?.length ? `【舞台上最近发生的事（简）】\n${stage.floors.slice(-3).map(f => `${f.name}：${f.text.slice(0, 160)}`).join('\n')}` : '',
+        hist ? `【此前的私聊】\n${hist}` : '',
+        `【玩家刚刚${asInstruction ? '发来指令' : '说'}】\n${text}`,
+        '按格式回应。',
+    ].filter(Boolean).join('\n\n');
+    return [
+        { role: 'system', content: sys },
+        { role: 'user', content: user },
+    ];
+}
+
+const SHEET_SCHEMA = `{"personality":"性格，150字内","appearance":"外貌，80字内","backstory":"经历/背景，200字内","voice":"口吻、口癖、说话习惯，80字内","bottomLines":"绝不做的事，60字内","goals":"长期目标，60字内","emoji":"一个最像TA的emoji"}`;
+
+export function buildSheetGenerationMessages({ name, source, hints, searchDigest, origin }) {
+    const sys = `你是资深的角色设定编辑。根据给定信息，写出一份可直接用于即兴剧演员的人设卡。要求：准确（有原作就忠于原作）、具体（可演出来的细节，而非空洞形容词）、有棱角（写出矛盾与底线）。只输出一个 JSON 对象，不要前后缀、不要代码块。字段：${SHEET_SCHEMA}`;
+    const user = [
+        `人物：${name}`,
+        origin === 'crossover' && source ? `来源作品：《${source}》。这个人物会以原本的人格与记忆进入另一个故事（魂穿/身穿），人设卡要写清 TA 原本是谁、有什么执念与习惯。` : '',
+        hints ? `额外要求：${hints}` : '',
+        searchDigest ? `【联网搜索到的资料】\n${searchDigest}` : '',
+        '输出 JSON。',
+    ].filter(Boolean).join('\n\n');
+    return [
+        { role: 'system', content: sys },
+        { role: 'user', content: user },
+    ];
+}
+
+export function buildNpcExtractionMessages({ npcName, stage }) {
+    const sys = `你是资深的角色设定编辑。从舞台记录与世界书中提炼名叫「${npcName}」的人物，写成一份即兴剧演员可用的人设卡。没有的信息可以基于已有线索合理补全，但不要与记录冲突。只输出一个 JSON 对象，不要代码块。字段：${SHEET_SCHEMA}`;
+    const user = [
+        stage.loreText ? `【世界书】\n${stage.loreText}` : '',
+        `【舞台记录】\n${(stage.floors || []).map(f => `${f.name}：${f.text}`).join('\n\n')}`,
+        `提炼「${npcName}」。输出 JSON。`,
+    ].filter(Boolean).join('\n\n');
+    return [
+        { role: 'system', content: sys },
+        { role: 'user', content: user },
+    ];
+}
+
+export function buildSalonDigest(salon, n = 8) {
+    const list = (salon || []).slice(-n);
+    if (!list.length) return '';
+    return list.map(m => `${m.fromName}：${m.text}`).join('\n');
+}
