@@ -8,7 +8,7 @@ import { generateSheet, extractNpcSheet, sheetFromCharacter, listCharacters } fr
 import { ensureDefaultConnection } from '../../connections.js';
 
 const EMOJIS = ['🎭', '🗡️', '🌙', '🔥', '🌸', '🦊', '🐺', '🕊️', '⚔️', '🍶', '📜', '🌊', '🪶', '🎐', '🐉', '🧧'];
-const COLORS = ['#c8553d', '#b5893a', '#5b8a72', '#4a6fa5', '#8a5b9e', '#a34a6a', '#3d7a8c', '#6b6b6b'];
+const COLORS = ['#d4482f', '#b97f12', '#3a7a5a', '#3b62a3', '#7a5c9e', '#b2486a', '#2f7f8c', '#7a6f5e'];
 
 export function renderActors(root, app, params = {}) {
     ensureDefaultConnection();
@@ -120,7 +120,7 @@ export function renderActors(root, app, params = {}) {
         renderChronicle();
 
         add(root, head,
-            h('div', { class: 'pa-detail-grid' },
+            h('div', { class: 'pa-detail-grid', style: { '--pa-actor': a.color } },
                 h('section', { class: 'pa-card' }, h('div', { class: 'pa-section-title' }, icon('heart'), ' 此刻'), field('心情', moodIn), field('目标', goalIn),
                     st.pendingInstruction ? h('div', { class: 'pa-pending' }, icon('bolt'), h('span', {}, '待执行指令：', st.pendingInstruction.text)) : null,
                     st.lastMove ? h('div', {}, h('div', { class: 'pa-kicker' }, '上一手'), renderRich(st.lastMove)) : null),

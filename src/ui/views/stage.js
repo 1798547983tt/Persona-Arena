@@ -5,6 +5,7 @@ import { getSettings, saveSettings, getActor } from '../../settings.js';
 import { getState, activeActors, currentRound, saveState } from '../../state.js';
 import { startRound, abortRound, isRunning, regenerateMove, setMoveText, composeDispatch, dispatchRound, onRoundChange } from '../../rounds.js';
 import { recentFloors, scanLore } from '../../stage.js';
+import { markMoves, settleMovesIfRedrawn, sweepComplete } from '../motion.js';
 
 const STATUS_LABEL = { pending: '候场', running: '出手中', done: '已出手', error: '失败', aborted: '中止' };
 
@@ -57,7 +58,7 @@ export function renderStage(root, app) {
 
     function moveCard(m) {
         const actor = getActor(m.actorId) || { name: m.name, emoji: m.emoji, color: m.color };
-        const card = h('article', { class: `pa-move pa-move-${m.status}`, dataset: { actorId: m.actorId } });
+        const card = h('article', { class: `pa-move pa-move-${m.status}`, dataset: { actorId: m.actorId }, style: { '--pa-actor': actor.color || 'var(--pa-accent)' } });
         const body = h('div', { class: 'pa-move-body' });
         const textEl = h('div', { class: 'pa-move-text' });
         if (m.text) add(textEl, renderRich(m.text));
@@ -101,6 +102,8 @@ export function renderStage(root, app) {
     }
 
     function renderMoves() {
+        markMoves(movesEl, { live: isRunning() });
+        settleMovesIfRedrawn(movesEl, isRunning());
         clear(movesEl);
         if (!viewing) {
             add(movesEl, h('div', { class: 'pa-empty pa-empty-poem' },
@@ -169,7 +172,8 @@ export function renderStage(root, app) {
     renderAll();
 
     const off = onRoundChange((round, detail) => {
-        if (detail.started) { viewing = round; renderAll(); return; }
+        markMoves(movesEl, { live: isRunning() });
+        if (detail.started) { markMoves(movesEl, { settled: false }); viewing = round; renderAll(); return; }
         if (round.id !== viewing?.id) return;
         if (detail.streaming && detail.move) {
             const card = movesEl.querySelector(`[data-actor-id="${detail.move.actorId}"] .pa-move-text`);
@@ -182,6 +186,10 @@ export function renderStage(root, app) {
             if (old) old.replaceWith(fresh); else add(movesEl, fresh);
             renderDispatch();
             return;
+        }
+        if (detail.finished && !detail.move) {
+            markMoves(movesEl, { settled: true });
+            if (round.status === 'done') sweepComplete(movesEl);
         }
         renderAll();
     });

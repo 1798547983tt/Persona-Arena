@@ -220,7 +220,7 @@ export function renderSettings(root, app, params = {}) {
     );
 
     // ---------- 外观 ----------
-    const themeSel = select([{ value: 'ink', label: '墨与月（深色）' }, { value: 'paper', label: '宣纸（浅色）' }], { value: s.ui.theme });
+    const themeSel = select([{ value: 'ink', label: '夜帖（深色）' }, { value: 'paper', label: '宣纸（浅色）' }], { value: s.ui.theme });
     themeSel.addEventListener('change', () => { s.ui.theme = themeSel.value; saveSettings(); app.applyTheme(); });
     const accentIn = input({ type: 'color', value: s.ui.accent, class: 'pa-input pa-input-color' });
     accentIn.addEventListener('input', () => { s.ui.accent = accentIn.value; saveSettings(); app.applyTheme(); });

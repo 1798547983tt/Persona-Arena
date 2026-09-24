@@ -1,5 +1,7 @@
 // 悬浮球：Pointer Events、拖动/点击仲裁、吸边、归一化坐标持久化、长按半隐。参考 STDB/C11。
 
+import { settlePulse, pauseWhenHidden } from './motion.js';
+
 const STORAGE_KEY = 'persona-arena:orb-placement';
 const STORAGE_VERSION = 1;
 const DRAG_THRESHOLD = 6;
@@ -78,6 +80,7 @@ export function createOrb({ onOpen }) {
         state.hidden = false;
         savePlacement(state);
         applyState(true);
+        settlePulse(el);
     }
 
     function clearLongPress() { clearTimeout(longPressTimer); longPressTimer = null; }
@@ -142,6 +145,7 @@ export function createOrb({ onOpen }) {
     window.visualViewport?.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', () => setTimeout(onResize, 300));
 
+    const unpause = pauseWhenHidden(el);
     document.body.appendChild(el);
     applyState(false);
     requestAnimationFrame(() => el.classList.add('pa-orb-mounted'));
@@ -163,6 +167,7 @@ export function createOrb({ onOpen }) {
         destroy() {
             window.removeEventListener('resize', onResize);
             window.visualViewport?.removeEventListener('resize', onResize);
+            unpause();
             el.remove();
         },
     };

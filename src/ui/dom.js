@@ -5,7 +5,7 @@ export function h(tag, props = {}, ...children) {
     for (const [k, v] of Object.entries(props || {})) {
         if (v === null || v === undefined || v === false) continue;
         if (k === 'class') el.className = v;
-        else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+        else if (k === 'style' && typeof v === 'object') { for (const [sk, sv] of Object.entries(v)) { if (sk.startsWith('--')) el.style.setProperty(sk, sv); else el.style[sk] = sv; } }
         else if (k === 'dataset') Object.assign(el.dataset, v);
         else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
         else if (k === 'html') el.innerHTML = sanitize(v);
@@ -139,5 +139,5 @@ export function collapsible(title, contentEl, { open = false } = {}) {
 }
 
 export function avatarBadge(actor, size = 'md') {
-    return h('span', { class: `pa-avatar pa-avatar-${size}`, style: { '--pa-actor': actor?.color || '#c8553d' } }, actor?.emoji || '🎭');
+    return h('span', { class: `pa-avatar pa-avatar-${size}`, style: { '--pa-actor': actor?.color || '#d4482f' } }, actor?.emoji || '🎭');
 }

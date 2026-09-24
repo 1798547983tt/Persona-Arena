@@ -4,6 +4,10 @@
 
 ![stage](docs/screenshots/stage.png)
 
+| 沙龙 | 宣纸（浅色） |
+|---|---|
+| ![salon](docs/screenshots/salon.png) | ![paper](docs/screenshots/paper-stage.png) |
+
 ## 它能做什么
 
 - **多演员、多接口**：每位演员可以绑定不同的 API 地址、密钥与模型（OpenAI 兼容 / Claude / Gemini / DeepSeek / 酒馆连接配置 / 酒馆当前连接），也可以共用。
@@ -14,7 +18,7 @@
 - **私语与指令**：私聊某位演员下指令；TA 会根据性格、底线和关系**接受 / 拒绝 / 讲条件**。让 TA 去刺杀自己最重要的人？大概率会被拒。
 - **人设工坊**：内置 10 个性格预设；可从酒馆角色卡导入、从舞台提炼 NPC、或填"来源作品 + 人物"联网搜索后一键生成同人角色（魂穿 / 身穿）。
 - **入口**：可拖拽吸边的悬浮球、魔棒扩展菜单项、`/arena` 与 `/arena-round` 斜杠命令。
-- **两套主题**：墨与月（深色）、宣纸（浅色）；桌面为浮窗，手机为全屏抽屉；遵守酒馆的减少动效 / 关闭模糊设置。
+- **两套主题**：夜帖（深色）、宣纸（浅色），「浮世靛朱金」配色——靛青定调、朱砂点睛、藤黄／松绿／胭脂做各页题签、金泥线做裱边；桌面为浮窗，手机为全屏抽屉；遵守酒馆的减少动效 / 关闭模糊 / 去阴影设置，不依赖任何外网资源。
 
 ## 安装
 
@@ -55,7 +59,7 @@ https://github.com/1798547983tt/Persona-Arena
 ```
 manifest.json         扩展清单
 index.js              入口：悬浮球、面板、魔棒项、斜杠命令
-style.css             主题「墨与月」「宣纸」
+style.css             主题「夜帖」「宣纸」与全部动效
 src/
   settings.js         全局设置
   state.js            每聊天运行态
@@ -66,7 +70,7 @@ src/
   rounds.js           回合编排与汇总
   social.js           沙龙与私语
   search.js           联网搜索与人设生成
-  ui/                 悬浮球、面板外壳、五个页签
+  ui/                 悬浮球、面板外壳、五个页签、motion.js（动效标记钩子）
 docs/
   design/grill-session.md   设计树（grill-with-docs 记录）
   adr/                      架构决策记录

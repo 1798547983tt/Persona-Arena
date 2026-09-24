@@ -7,6 +7,7 @@ import { renderActors } from './views/actors.js';
 import { renderSalon } from './views/salon.js';
 import { renderWhisper } from './views/whisper.js';
 import { renderSettings } from './views/settings.js';
+import { markTab } from './motion.js';
 
 const TABS = [
     { id: 'stage', label: '舞台', icon: 'masks-theater', render: renderStage },
@@ -60,7 +61,9 @@ export function createPanel({ orb }) {
         const s = getSettings();
         root.classList.toggle('pa-theme-ink', s.ui.theme !== 'paper');
         root.classList.toggle('pa-theme-paper', s.ui.theme === 'paper');
-        root.style.setProperty('--pa-accent', s.ui.accent || '#c8553d');
+        const accent = s.ui.accent || '#d4482f';
+        root.style.setProperty('--pa-accent', accent);
+        orb?.el?.style.setProperty('--pa-accent', accent);
         root.style.setProperty('--pa-font-scale', String(s.ui.fontScale || 1));
         const shell = s.ui.shell || 'auto';
         const narrow = window.matchMedia('(max-width: 1000px)').matches || window.matchMedia('(pointer: coarse) and (max-width: 1200px)').matches;
@@ -72,12 +75,13 @@ export function createPanel({ orb }) {
         clear(tabsEl);
         for (const t of TABS) {
             const b = h('button', {
-                type: 'button', role: 'tab', class: `pa-tab ${t.id === currentTab ? 'active' : ''}`,
+                type: 'button', role: 'tab', class: `pa-tab ${t.id === currentTab ? 'active' : ''}`, dataset: { tab: t.id },
                 'aria-selected': t.id === currentTab ? 'true' : 'false',
                 onClick: () => api.openTab(t.id),
             }, icon(t.icon), h('span', {}, t.label));
             add(tabsEl, b);
         }
+        markTab(root, tabsEl, TABS, currentTab);
     }
 
     function renderView() {
