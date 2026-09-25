@@ -3,7 +3,9 @@
 import { h, add, clear, button, icon, toggle, toast, input, textarea, select, field, collapsible, confirmDialog, fmtTime, renderRich } from '../dom.js';
 import { getSettings, saveSettings, getCanon, upsertCanon } from '../../settings.js';
 import { getPlot, saveState } from '../../state.js';
-import { listLoreBooks, refreshLoreBooks, loadLoreEntries, summarizeText, canonFromLore, canonFromText, canonFromKnowledge, deleteCanon, readFileAsText, generateCompass, abortPlot, plotBusy, onPlotChange, compassToText, injectionText, applyInjection, clearCompass } from '../../plot.js';
+import { listLoreBooks, refreshLoreBooks, loadLoreEntries, summarizeText, canonFromLore, canonFromText, canonFromKnowledge, deleteCanon, structureCanon, locateNow, loadCanonDetail, saveCanonDetail, exportCanon, importCanon, readFileAsText, generateCompass, abortPlot, plotBusy, onPlotChange, compassToText, injectionText, applyInjection, clearCompass } from '../../plot.js';
+
+const SOURCE_LABEL = { txt: 'TXT', lore: '世界书', knowledge: '同人', manual: '手写', import: '导入' };
 
 const CHANCE_CLS = { '高': 'pa-chip-ok', '中': 'pa-chip-warn', '低': '' };
 
@@ -20,14 +22,65 @@ export function renderPlot(root, app) {
     const compassSection = h('section', { class: 'pa-card pa-card-wide' });
     const progress = h('div', { class: 'pa-progress', hidden: true });
     function setProgress(t) { progress.hidden = !t; progress.textContent = t || ''; }
+    function downloadJson(name, text) {
+        const blob = new Blob([text], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = name; a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }
+
+    // ---------- 幕目 ----------
+    async function renderActs(box, canon) {
+        clear(box);
+        const detail = await loadCanonDetail(canon.id);
+        if (getPlot().canonId !== canon.id) return;
+        const structureBtn = button('自动分幕', { icon: 'layer-group', kind: 'primary small', onClick: async () => {
+            structureBtn.disabled = true;
+            try { await structureCanon({ canonId: canon.id, onProgress: setProgress }); toast('success', '已整理出幕目'); renderCanon(); renderCompass(); }
+            catch (err) { toast('error', err.message); } finally { structureBtn.disabled = false; setProgress(''); }
+        } });
+        if (!detail?.acts?.length) {
+            add(box, h('div', { class: 'pa-field-hint' }, '幕目 = 按阶段分的"幕"，每幕若干条剧情点。有了幕目，罗盘才能判断故事进行到原著哪一段、接下来该发生什么。'),
+                h('div', { class: 'pa-row pa-wrap' }, structureBtn, button('中止', { kind: 'ghost small', onClick: () => abortPlot() })));
+            return;
+        }
+        const cur = plot.located?.canonId === canon.id ? plot.located.actIndex : -1;
+        const total = detail.acts.reduce((n, a) => n + (a.points?.length || 0), 0);
+        const persist = async (msg) => { detail.acts.forEach((a, i) => { a.index = i; }); await saveCanonDetail(canon.id, detail); if (msg) toast('success', msg); renderActs(box, canon); renderCompass(); };
+        const list = h('div', { class: 'pa-acts' });
+        detail.acts.forEach((a, i) => {
+            const titleIn = input({ value: a.title });
+            const sumIn = input({ value: a.summary || '' });
+            const ptsTa = textarea({ value: (a.points || []).join('\n'), rows: Math.max(3, Math.min(12, (a.points || []).length + 1)) });
+            const save = button('保存本幕', { icon: 'check', kind: 'ghost small', onClick: () => { a.title = titleIn.value.trim() || a.title; a.summary = sumIn.value.trim(); a.points = ptsTa.value.split('\n').map(x => x.trim()).filter(Boolean); persist('本幕已保存'); } });
+            const insert = button('在此后插入一幕', { icon: 'plus', kind: 'ghost small', onClick: () => { detail.acts.splice(i + 1, 0, { index: i + 1, title: '新的一幕', summary: '', from: a.to, to: a.to, points: [], characters: [] }); persist(); } });
+            const del = button('删除本幕', { icon: 'trash', kind: 'danger small', onClick: async () => { if (detail.acts.length <= 1) { toast('warning', '至少保留一幕'); return; } if (await confirmDialog('删除幕', `删除第 ${i + 1} 幕《${a.title}》？`)) { detail.acts.splice(i, 1); persist('已删除'); } } });
+            const mark = button('定为当前幕', { icon: 'location-crosshairs', kind: 'ghost small', onClick: () => { plot.actOverride = i; plot.located = { canonId: canon.id, actIndex: i, title: a.title, reason: '导演手动指定', confidence: '高', pointHint: '', manual: true, actsCount: detail.acts.length, at: Date.now(), floor: (SillyTavern.getContext().chat || []).length }; saveState(); toast('success', `当前幕：第 ${i + 1} 幕`); renderActs(box, canon); renderCompass(); } });
+            add(list, h('details', { class: `pa-act ${i === cur ? 'current' : i < cur ? 'past' : ''}` },
+                h('summary', {}, h('span', { class: 'pa-act-no' }, `第${i + 1}幕`), h('span', { class: 'pa-act-title' }, a.title), h('span', { class: 'pa-act-summary' }, a.summary || ''), i === cur ? h('span', { class: 'pa-chip pa-chip-ok' }, '当前') : null),
+                h('div', { class: 'pa-act-body' },
+                    a.summary ? h('div', { class: 'pa-muted pa-small', style: { margin: '6px 0' } }, a.summary) : null,
+                    h('ol', { class: 'pa-act-points' }, (a.points || []).map(pt => h('li', {}, pt))),
+                    a.characters?.length ? h('div', { class: 'pa-act-chars' }, '人物：' + a.characters.join('、')) : null,
+                    collapsible('编辑本幕', h('div', {}, field('标题', titleIn), field('概述', sumIn), field('剧情点（每行一条）', ptsTa), h('div', { class: 'pa-row pa-wrap' }, save, mark, insert, del))),
+                )));
+        });
+        add(box,
+            h('div', { class: 'pa-row pa-wrap' },
+                h('span', { class: 'pa-muted pa-small' }, `${detail.acts.length} 幕 · ${total} 个剧情点${cur >= 0 ? ` · 当前第 ${cur + 1} 幕` : ''}`),
+                button('导出原著', { icon: 'download', kind: 'ghost small', onClick: () => downloadJson(`${canon.name}.canon.json`, exportCanon(canon, detail)) }),
+                button('重新分幕', { icon: 'rotate', kind: 'ghost small', title: '用模型按概览重新划分幕目（会覆盖手改）', onClick: async () => { if (await confirmDialog('重新分幕', '会用模型重新整理幕目，覆盖现有幕与手改的内容。')) { structureBtn.click(); } } }),
+            ),
+            list);
+    }
 
     // ---------- 原著 ----------
     function renderCanon() {
         clear(canonSection);
         const canons = getSettings().canons;
         const current = plot.canonId ? getCanon(plot.canonId) : null;
-        const sel = select([{ value: '', label: '（无原著 · 自由剧情）' }, ...canons.map(c => ({ value: c.id, label: `${c.name} · ${c.sourceType === 'txt' ? 'TXT' : c.sourceType === 'lore' ? '世界书' : '手写'} · ${Math.round((c.digest || '').length / 100) / 10}k 字` }))], { value: plot.canonId || '' });
-        sel.addEventListener('change', () => { plot.canonId = sel.value; saveState(); renderCanon(); });
+        const sel = select([{ value: '', label: '（无原著 · 自由剧情）' }, ...canons.map(c => ({ value: c.id, label: `${c.name} · ${SOURCE_LABEL[c.sourceType] || c.sourceType}${c.actsCount ? ` · ${c.actsCount} 幕` : ''} · ${Math.round((c.digest || '').length / 100) / 10}k 字` }))], { value: plot.canonId || '' });
+        sel.addEventListener('change', () => { plot.canonId = sel.value; plot.actOverride = -1; saveState(); renderCanon(); renderCompass(); });
         add(canonSection,
             h('div', { class: 'pa-section-title' }, icon('book'), ' 原著', h('span', { class: 'pa-muted pa-small' }, '　剧情走向以它为基准；也可以不选，纯凭故事本身推演')),
             field('当前原著', sel),
@@ -36,10 +89,15 @@ export function renderPlot(root, app) {
             const ta = textarea({ value: current.digest, rows: 10 });
             const save = button('保存修改', { icon: 'check', kind: 'ghost small', onClick: () => { current.digest = ta.value; upsertCanon(current); toast('success', '梗概已更新'); } });
             const del = button('删除此原著', { icon: 'trash', kind: 'danger small', onClick: async () => { if (await confirmDialog('删除原著', `删除「${current.name}」的梗概？`)) { await deleteCanon(current.id); renderCanon(); } } });
-            add(canonSection, collapsible(`梗概 · ${current.name}（${current.chunks || 0} 段提要 → ${current.digest.length} 字，可手改）`, h('div', {}, ta, h('div', { class: 'pa-row pa-wrap' }, save, del))));
+            const actsBox = h('div', { class: 'pa-acts-box' });
+            add(canonSection,
+                collapsible(`概览 · ${current.name}（${current.chars ? Math.round(current.chars / 1000) + 'k 字原文 → ' : ''}${current.digest.length} 字，可手改）`, h('div', {}, ta, h('div', { class: 'pa-row pa-wrap' }, save, del))),
+                collapsible(`幕目 · ${current.actsCount ? current.actsCount + ' 幕' : '尚未分幕'}`, actsBox, { open: !current.actsCount }),
+            );
+            renderActs(actsBox, current);
         }
         // 新建
-        const MODE_META = { knowledge: ['wand-magic-sparkles', '同人：按作品名生成'], txt: ['file-lines', '导入 TXT 小说'], lore: ['book-atlas', '从世界书选条目'], manual: ['pen-nib', '手写梗概'] };
+        const MODE_META = { knowledge: ['wand-magic-sparkles', '同人：按作品名生成'], txt: ['file-lines', '导入 TXT 小说'], lore: ['book-atlas', '从世界书选条目'], manual: ['pen-nib', '手写梗概'], file: ['file-import', '导入原著文件'] };
         const modes = h('div', { class: 'pa-row pa-wrap pa-seg' },
             Object.entries(MODE_META).map(([m, [ic, label]]) => h('button', { type: 'button', class: `pa-chip pa-chip-btn ${newMode === m ? 'active' : ''}`, onClick: () => { newMode = m; renderCanon(); } }, icon(ic), ' ', label)),
         );
@@ -54,7 +112,7 @@ export function renderPlot(root, app) {
                 go.disabled = true;
                 try {
                     const canon = await canonFromKnowledge({ name, hints: hintIn.value.trim(), useSearch: useSearch.querySelector('input').checked, onProgress: setProgress });
-                    plot.canonId = canon.id; saveState(); toast('success', `《${name}》梗概已生成${canon.searched ? '（含联网资料）' : '（凭模型知识）'}`); renderCanon();
+                    plot.canonId = canon.id; plot.actOverride = -1; saveState(); toast('success', `《${name}》已生成${canon.actsCount ? `（${canon.actsCount} 幕）` : ''}${canon.searched ? '，含联网资料' : '，凭模型知识'}`); renderCanon(); renderCompass();
                 } catch (err) { toast('error', err.message); } finally { go.disabled = false; setProgress(''); }
             } });
             add(box, field('作品', nameIn), field('补充说明', hintIn), h('div', { class: 'pa-row pa-wrap' }, go, useSearch, button('中止', { kind: 'ghost small', onClick: () => abortPlot() })),
@@ -62,13 +120,14 @@ export function renderPlot(root, app) {
         } else if (newMode === 'txt') {
             const nameIn = input({ placeholder: '原著名字，例如：某某传' });
             const fileIn = h('input', { type: 'file', accept: '.txt,text/plain', class: 'pa-input pa-file' });
-            const info = h('div', { class: 'pa-field-hint' }, '支持 UTF-8 / GBK 编码；按段落切成约 6000 字一段逐段提要，再汇总成梗概。长篇（百万字）需要较长时间和较多 token。');
+            const info = h('div', { class: 'pa-field-hint' }, '支持 UTF-8 / GBK 编码。流程：逐段提取剧情点 → 合并成节 → 模型按阶段分幕 → 每幕整理剧情点 → 写概览。百万字长篇需要数百次请求，可随时中止、之后同一文件续跑。');
             let text = '';
             fileIn.addEventListener('change', async () => {
                 const f = fileIn.files?.[0]; if (!f) return;
                 text = await readFileAsText(f);
                 if (!nameIn.value.trim()) nameIn.value = f.name.replace(/\.txt$/i, '');
-                info.textContent = `已读取 ${f.name}：${text.length.toLocaleString()} 字，预计 ${Math.ceil(text.length / (Number(getSettings().plot.chunkChars) || 6000))} 段。`;
+                const segs = Math.ceil(text.length / (Number(getSettings().plot.chunkChars) || 6000));
+                info.textContent = `已读取 ${f.name}：${text.length.toLocaleString()} 字，约 ${segs} 段、${Math.max(1, Math.ceil(segs / (Number(getSettings().plot.sectionChunks) || 6)))} 节，总计约 ${segs + Math.ceil(segs / 6) + 4} 次请求。`;
             });
             const go = button('开始总结', { icon: 'wand-magic-sparkles', kind: 'primary small', onClick: async () => {
                 if (!text.trim()) { toast('warning', '先选择 TXT 文件'); return; }
@@ -76,7 +135,7 @@ export function renderPlot(root, app) {
                 go.disabled = true;
                 try {
                     const canon = await summarizeText({ name, text, sourceType: 'txt', onProgress: setProgress });
-                    plot.canonId = canon.id; saveState(); toast('success', `《${name}》梗概已生成`); renderCanon();
+                    plot.canonId = canon.id; plot.actOverride = -1; saveState(); toast('success', `《${name}》已整理成 ${canon.actsCount || 0} 幕`); renderCanon(); renderCompass();
                 } catch (err) { toast('error', err.message); } finally { go.disabled = false; setProgress(''); }
             } });
             add(box, field('名字', nameIn), field('TXT 文件', fileIn), info, h('div', { class: 'pa-row pa-wrap' }, go, button('中止', { kind: 'ghost small', onClick: () => abortPlot() })));
@@ -128,15 +187,25 @@ export function renderPlot(root, app) {
             } });
             add(box, field('世界书', h('div', { class: 'pa-row' }, bookSel, refreshBtn), books.length ? '' : '列表为空时通常是酒馆版本较旧或世界书尚未加载；刷新会直接向酒馆服务器要列表。'), h('div', { class: 'pa-row pa-wrap' }, allBtn, noneBtn, h('span', { class: 'pa-muted pa-small' }, plot.loreUids?.length ? `当前附带：${plot.loreBook} · ${plot.loreUids.length} 条` : '')), list, field('名字', nameIn), h('div', { class: 'pa-row pa-wrap' }, asCanon, asLore));
             if (loreBook) loadList();
-        } else {
+        } else if (newMode === 'manual') {
             const nameIn = input({ placeholder: '原著名字' });
             const ta = textarea({ rows: 8, placeholder: '直接写下原著梗概：主线、人物、转折、设定、必然逻辑…' });
             const go = button('保存为原著', { icon: 'check', kind: 'primary small', onClick: () => {
                 if (!ta.value.trim()) { toast('warning', '先写点内容'); return; }
                 const canon = canonFromText({ name: nameIn.value.trim() || '手写原著', digest: ta.value });
-                plot.canonId = canon.id; saveState(); toast('success', '已保存'); renderCanon();
+                plot.canonId = canon.id; saveState(); toast('success', '已保存，可在「幕目」里点自动分幕'); renderCanon();
             } });
             add(box, field('名字', nameIn), field('梗概', ta), go);
+        } else {
+            const fileIn = h('input', { type: 'file', accept: '.json,application/json', class: 'pa-input pa-file' });
+            fileIn.addEventListener('change', async () => {
+                const f = fileIn.files?.[0]; if (!f) return;
+                try {
+                    const canon = await importCanon(JSON.parse(await f.text()));
+                    plot.canonId = canon.id; plot.actOverride = -1; saveState(); toast('success', `已导入《${canon.name}》${canon.actsCount ? `（${canon.actsCount} 幕）` : ''}`); renderCanon(); renderCompass();
+                } catch (err) { toast('error', err.message); }
+            });
+            add(box, field('原著文件（.canon.json）', fileIn), h('div', { class: 'pa-field-hint' }, '导入别人整理好的原著（含概览与幕目）。用「幕目」里的「导出原著」可以生成这种文件，方便分享。'));
         }
         add(canonSection, h('div', { class: 'pa-kicker' }, '新建原著'), modes, box, progress);
     }
@@ -154,6 +223,33 @@ export function renderPlot(root, app) {
     function compassCard(kind, title, ic, body) {
         return h('section', { class: `pa-compass-card pa-compass-${kind}` }, h('div', { class: 'pa-compass-title' }, icon(ic), h('span', {}, title)), body);
     }
+    function renderLocate(busy) {
+        const current = plot.canonId ? getCanon(plot.canonId) : null;
+        if (!current) return null;
+        const loc = plot.located?.canonId === current.id ? plot.located : null;
+        const n = current.actsCount || loc?.actsCount || 0;
+        if (!n) {
+            return h('div', { class: 'pa-locate' }, h('div', { class: 'pa-locate-head' }, icon('location-crosshairs'), h('span', { class: 'pa-muted' }, `《${current.name}》还没有幕目，罗盘无法判断进行到哪一段。`),
+                button('自动分幕', { icon: 'layer-group', kind: 'ghost small', disabled: !!busy, onClick: async () => { try { await structureCanon({ canonId: current.id, onProgress: setProgress }); toast('success', '已整理出幕目'); renderCanon(); renderCompass(); } catch (err) { toast('error', err.message); } finally { setProgress(''); } } })));
+        }
+        const titles = current.actTitles || [];
+        const sel = select([{ value: '-1', label: '自动判断（模型根据正文定位）' }, ...Array.from({ length: n }, (_, i) => ({ value: String(i), label: `第 ${i + 1} 幕${titles[i] ? ' · ' + titles[i] : ''}` }))], { value: String(Number.isInteger(plot.actOverride) && plot.actOverride >= 0 ? plot.actOverride : -1) });
+        sel.addEventListener('change', () => { plot.actOverride = Number(sel.value); saveState(); });
+        const pct = loc ? Math.round((loc.actIndex + 1) / n * 100) : 0;
+        const conf = loc?.manual ? 'pa-chip-ok' : loc?.confidence === '高' ? 'pa-chip-ok' : loc?.confidence === '低' ? 'pa-chip-bad' : 'pa-chip-warn';
+        return h('div', { class: 'pa-locate' },
+            h('div', { class: 'pa-locate-head' }, icon('location-crosshairs'),
+                ...(loc
+                    ? [h('b', {}, `第 ${loc.actIndex + 1} / ${n} 幕`), h('span', {}, `《${loc.title || titles[loc.actIndex] || ''}》`), loc.pointHint ? h('span', { class: 'pa-muted pa-small' }, '约至：' + loc.pointHint) : null, h('span', { class: `pa-chip ${conf}` }, loc.manual ? '手动指定' : `置信 ${loc.confidence || '?'}`)]
+                    : [h('span', { class: 'pa-muted' }, `《${current.name}》共 ${n} 幕 · 尚未定位，推演时会自动判断进行到哪一幕`)]),
+            ),
+            h('div', { class: 'pa-locate-track' }, h('i', { style: { width: `${pct}%` } })),
+            h('div', { class: 'pa-locate-row' }, field('当前幕', sel),
+                button(busy === 'locate' ? '定位中…' : '重新定位', { icon: busy === 'locate' ? 'spinner fa-spin' : 'location-crosshairs', kind: 'ghost small', disabled: !!busy, onClick: async () => { try { await locateNow({ onProgress: setProgress }); toast('success', '已定位'); } catch (err) { toast('error', err.message); } finally { setProgress(''); renderCanon(); renderCompass(); } } })),
+            loc?.reason ? h('div', { class: 'pa-locate-reason' }, `依据：${loc.reason}${loc.floor ? ` · 第 ${loc.floor} 楼时判断` : ''}`) : null,
+        );
+    }
+
     function renderCompass() {
         clear(compassSection);
         const s2 = getSettings();
@@ -187,7 +283,7 @@ export function renderPlot(root, app) {
             field('注入角色', roleSel),
             toggle(s2.plot.feedActors, (v) => { s2.plot.feedActors = v; saveSettings(); }, '演员也能看到走向'),
         );
-        add(compassSection, h('div', { class: 'pa-section-title' }, icon('compass'), ' 剧情罗盘'), head, controls, progress);
+        add(compassSection, h('div', { class: 'pa-section-title' }, icon('compass'), ' 剧情罗盘'), head, renderLocate(busy), controls, progress);
         if (!c) {
             add(compassSection, h('div', { class: 'pa-empty pa-empty-poem' }, h('p', {}, '棋未落，局未定。'), h('p', {}, '选好原著或写下备注，点「推演走向」。之后每出几楼可自动更新，并作为幕后指引注入正文提示词。')));
             return;
@@ -223,7 +319,7 @@ export function renderPlot(root, app) {
 
     const off = onPlotChange((d) => {
         if (d.progress !== undefined) return;
-        if (d.canon) renderCanon();
+        if (d.canon || d.located) renderCanon();
         renderCompass();
     });
     return () => off();

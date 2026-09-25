@@ -6,6 +6,8 @@ import { PROVIDERS, listModels, storeKey, deleteStoredKey, listStoredKeys, listP
 import { resetState } from '../../state.js';
 import { listJailbreakEntries, setJailbreakEntryOn, importJailbreakPreset, useBundledJailbreak, bundledPresetName, buildJailbreakText } from '../../jailbreak.js';
 
+const modelCache = new Map();
+
 export function renderSettings(root, app, params = {}) {
     const s = getSettings();
     let editingConn = params.editConnection ? structuredClone(s.connections.find(c => c.id === params.editConnection) || DEFAULT_CONNECTION) : null;
@@ -49,19 +51,31 @@ export function renderSettings(root, app, params = {}) {
         const profSel = select([{ value: '', label: '选择连接配置…' }, ...listProfiles().map(p => ({ value: p.id, label: `${p.name}${p.model ? ' · ' + p.model : ''}` }))], { value: c.profileId });
         profSel.addEventListener('change', () => { c.profileId = profSel.value; });
         const profField = field('连接配置', profSel, '在酒馆的 API 连接页保存的"连接配置"。没有的话这里是空的。');
-        const modelIn = input({ value: c.model, placeholder: '模型名，例如 gpt-4o / claude-sonnet-5 / deepseek-chat', list: 'pa-model-list' });
+        const modelIn = input({ value: c.model, placeholder: '模型名，例如 gpt-4o / claude-sonnet-5 / deepseek-chat' });
         modelIn.addEventListener('input', () => { c.model = modelIn.value.trim(); });
-        const dl = h('datalist', { id: 'pa-model-list' });
+        const modelSel = select([{ value: '', label: '拉取后从列表选择…' }], { value: '' });
+        modelSel.hidden = true;
+        modelSel.addEventListener('change', () => { if (modelSel.value) { modelIn.value = modelSel.value; c.model = modelSel.value; } });
+        function fillModelList(ids) {
+            clear(modelSel);
+            add(modelSel, h('option', { value: '' }, `从 ${ids.length} 个模型中选择…`));
+            for (const id of ids) add(modelSel, h('option', { value: id }, id));
+            modelSel.hidden = !ids.length;
+            if (c.model && ids.includes(c.model)) modelSel.value = c.model;
+        }
+        const cacheKey = `${c.provider}|${c.baseUrl}|${c.profileId}`;
+        if (modelCache.has(cacheKey)) fillModelList(modelCache.get(cacheKey));
         const fetchBtn = button('拉取模型', { icon: 'cloud-arrow-down', kind: 'ghost small', onClick: async () => {
             fetchBtn.disabled = true;
             try {
                 const ids = await listModels(c);
-                clear(dl); for (const id of ids) add(dl, h('option', { value: id }));
-                toast('success', `拿到 ${ids.length} 个模型，输入框里可以下拉选`);
+                modelCache.set(`${c.provider}|${c.baseUrl}|${c.profileId}`, ids);
+                fillModelList(ids);
+                toast('success', `拿到 ${ids.length} 个模型，下面的列表里可以选`);
                 if (!c.model && ids[0]) { modelIn.value = ids[0]; c.model = ids[0]; }
             } catch (err) { toast('error', err.message); } finally { fetchBtn.disabled = false; }
         } });
-        const modelField = field('模型', h('div', { class: 'pa-row' }, modelIn, fetchBtn, dl), c.provider === 'st-current' ? '留空 = 酒馆当前模型。' : '');
+        const modelField = field('模型', h('div', { class: 'pa-model-field' }, h('div', { class: 'pa-row' }, modelIn, fetchBtn), modelSel), c.provider === 'st-current' ? '留空 = 酒馆当前模型。可手填，也可拉取后从列表选。' : '可手填，也可拉取后从列表选。');
 
         const keyArea = h('div', {});
         async function refreshKeyArea() {
@@ -107,7 +121,7 @@ export function renderSettings(root, app, params = {}) {
             profField.hidden = c.provider !== 'st-profile';
             modelField.hidden = c.provider === 'st-profile';
             extraField.hidden = c.provider !== 'openai';
-            if (c.provider === 'anthropic') { clear(dl); for (const id of CLAUDE_MODELS) add(dl, h('option', { value: id })); }
+            if (c.provider === 'anthropic') fillModelList([...CLAUDE_MODELS]);
             refreshKeyArea();
         }
         provSel.addEventListener('change', () => { c.provider = provSel.value; refreshProvider(); });
@@ -286,11 +300,15 @@ export function renderSettings(root, app, params = {}) {
     chunkIn.addEventListener('change', () => { s.plot.chunkChars = Math.max(1500, Number(chunkIn.value) || 6000); saveSettings(); });
     const digestIn = input({ type: 'number', min: 1500, max: 12000, step: 500, value: s.plot.digestMaxChars, class: 'pa-input pa-input-num' });
     digestIn.addEventListener('change', () => { s.plot.digestMaxChars = Math.max(1500, Number(digestIn.value) || 5000); saveSettings(); });
+    const sectionIn = input({ type: 'number', min: 2, max: 20, value: s.plot.sectionChunks, class: 'pa-input pa-input-num' });
+    sectionIn.addEventListener('change', () => { s.plot.sectionChunks = Math.max(2, Math.min(20, Number(sectionIn.value) || 6)); saveSettings(); });
+    const parallelIn = input({ type: 'number', min: 1, max: 6, value: s.plot.parallel, class: 'pa-input pa-input-num' });
+    parallelIn.addEventListener('change', () => { s.plot.parallel = Math.max(1, Math.min(6, Number(parallelIn.value) || 2)); saveSettings(); });
     const plotSection = h('section', { class: 'pa-card' },
         h('div', { class: 'pa-section-title' }, icon('compass'), ' 剧情顾问'),
         field('推演与总结用哪套连接', plotConnSel, '长篇总结建议用大上下文、便宜的模型。'),
-        h('div', { class: 'pa-row pa-wrap' }, field('每段提要字数', chunkIn), field('梗概字数上限', digestIn)),
-        h('div', { class: 'pa-field-hint' }, '自动推演频率、注入深度等在「剧情」页里设置。'),
+        h('div', { class: 'pa-row pa-wrap' }, field('每段原文字数', chunkIn, '逐段提取剧情点的粒度'), field('每几段合成一节', sectionIn, '节再由模型归成幕'), field('并发请求数', parallelIn, '接口有速率限制就填 1'), field('概览字数上限', digestIn)),
+        h('div', { class: 'pa-field-hint' }, 'TXT 长篇会被整理成「幕 → 剧情点」：百万字约需数百次请求，中途关掉可续跑；同名同文件不会重复计算已完成的段。自动推演频率、注入深度等在「剧情」页里设置。'),
     );
 
     // ---------- 外观 ----------

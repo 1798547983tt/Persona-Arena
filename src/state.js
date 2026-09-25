@@ -43,6 +43,8 @@ function emptyPlot() {
         compassFloor: -1,
         history: [],
         guidanceOverride: '',
+        actOverride: -1,   // -1 = 让模型自动判断当前幕；>=0 = 导演手动指定的幕序号
+        located: null,     // { canonId, actIndex, title, reason, confidence, pointHint, actsCount, at, floor }
     };
 }
 

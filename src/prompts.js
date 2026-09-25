@@ -259,38 +259,9 @@ export function buildSalonDigest(salon, n = 8) {
 
 // ---------- 剧情罗盘 ----------
 
-export function buildChunkSummaryMessages({ name, index, total, chunk, prevSummary }) {
-    const sys = `你是小说编辑，正在为《${name}》做逐段剧情提要，供后续汇总成"原著梗概"。要求：只写这一段里发生的事实——人物、事件、因果、关系变化、埋下的伏笔、揭示的设定；按发生顺序写；不评论、不抒情；300 到 500 字；用中文。`;
-    const user = [
-        prevSummary ? `【上一段的提要（仅供衔接，不要重复）】\n${prevSummary}` : '',
-        `【第 ${index}/${total} 段原文】\n${chunk}`,
-        '写这一段的提要。',
-    ].filter(Boolean).join('\n\n');
-    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
-}
-
-export function buildDigestMessages({ name, summaries, maxChars }) {
-    const sys = `你是小说编辑，要把《${name}》的逐段提要汇总成一份"原著梗概"，供另一个 AI 判断故事走向用。用 Markdown，严格按以下小节输出，总长不超过 ${maxChars} 字：
-## 一句话概括
-## 主线梗概（按时间顺序，分阶段）
-## 主要人物（名字：身份、动机、与他人的关系、结局或去向）
-## 关键转折点（编号，每条一句：事件 → 后果）
-## 世界规则与设定（力量体系、势力、地理、禁忌）
-## 伏笔与未解之谜
-## 原著的必然逻辑（哪些事在原著逻辑下"必然"发生，为什么）
-只写原著里有的事实，不臆造。`;
-    const user = `【逐段提要】\n${summaries}\n\n输出梗概。`;
-    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
-}
-
-export function buildMergeSummariesMessages({ name, part, total, summaries }) {
-    const sys = `你是小说编辑。把《${name}》第 ${part}/${total} 批逐段提要压缩成一份连贯的阶段提要：保留全部人物、事件、因果与伏笔，去掉重复与废话，按时间顺序，不超过 1200 字。`;
-    return [{ role: 'system', content: sys }, { role: 'user', content: summaries }];
-}
-
 export const COMPASS_SCHEMA_TEXT = `{"now":"当前局势，2-3句","position":"对应原著进度或章节；没有原著则写\"无原著，自由剧情\"","inevitable":["在现有逻辑下必然会发生的事（写清为什么必然）"],"deviated":[{"what":"已脱离原著之处","cause":"因为什么改变","consequence":"由此带来的后果"}],"impossible":["原著里有、但现在已不可能再发生的事（写原因）"],"possible":[{"what":"可能发生的事","chance":"高|中|低","trigger":"触发条件"}],"butterflies":[{"origin":"起点：一件看似很小的变化","chain":["连锁反应1","连锁反应2"],"outcome":"最终影响"}],"beats":["接下来第一个节拍","第二个节拍","第三个节拍"],"guidance":"给正文 AI 的引导：3-5 句，说明该把故事往哪推、哪些事该自然发生、哪些不要写、节奏如何"}`;
 
-export function buildCompassMessages({ canonName, canonDigest, loreText, stage, notes, previous, actorsBrief, npcsBrief }) {
+export function buildCompassMessages({ canonName, canonDigest, canonPosition, loreText, stage, notes, previous, actorsBrief, npcsBrief }) {
     const sys = `你是这部互动故事的剧情顾问（不是作者）。你的工作是根据原著梗概、世界设定、故事至今的记录与导演备注，推演剧情走向：什么必然发生、什么已经脱离原著、什么已不可能、什么可能、以及蝴蝶效应。判断要严谨：
 - "必然"只写因果链已经闭合、除非外力否则一定发生的事；
 - "脱离原著"要指出是哪个变化造成的、后果是什么；
@@ -303,7 +274,8 @@ ${canonDigest ? '有原著时，以原著逻辑为基准；' : '没有原著时�
 所有值用中文。
 ${JSON_ONLY_RULE}`;
     const user = [
-        canonDigest ? `【原著梗概：《${canonName || '原著'}》】\n${canonDigest}` : '【原著】无。这是自由剧情。',
+        canonDigest ? `【原著概览：《${canonName || '原著'}》】\n${canonDigest}` : '【原著】无。这是自由剧情。',
+        canonPosition ? `【原著幕目与当前位置】\n${canonPosition}\n（canonAhead 请从"本幕尚未发生的剧情点"和"下一幕"里取；position 写清第几幕、进行到哪个剧情点。）` : '',
         loreText ? `【世界书 / 设定】\n${loreText}` : '',
         actorsBrief ? `【竞技场演员（插件控制的角色）】\n${actorsBrief}` : '',
         npcsBrief ? `【已登场的其他人物】\n${npcsBrief}` : '',
@@ -343,31 +315,82 @@ ${JSON_ONLY_RULE}`;
 }
 
 
-export function buildCanonFromKnowledgeMessages({ name, hints, sources, maxChars }) {
-    const sys = `你是熟悉各类小说、动漫、游戏与影视作品的资深编辑，要为《${name}》写一份"原著梗概"，供另一个 AI 判断同人故事的走向。${sources ? '优先依据给定资料，资料没有的用你自己的知识补全；' : '凭你自己对这部作品的知识撰写；'}拿不准的地方标注"（不确定）"，不要编造。用 Markdown，严格按以下小节输出，总长不超过 ${maxChars} 字：
-## 一句话概括
-## 主线梗概（按时间顺序，分阶段或分卷）
-## 主要人物（名字：身份、性格与口吻特征、动机、与他人的关系、结局或去向）
-## 关键转折点（编号，每条一句：事件 → 后果）
-## 世界规则与设定（力量体系、势力、地理、禁忌）
-## 伏笔与未解之谜
-## 原著的必然逻辑（哪些事在原著逻辑下"必然"发生，为什么）
-## 同人常见 OOC 点（写这部作品的人物最容易写偏的地方）`;
-    const user = [
-        `作品：《${name}》`,
-        hints ? `补充说明：${hints}` : '',
-        sources ? `【资料】\n${sources}` : '',
-        '输出梗概。',
-    ].filter(Boolean).join('\n\n');
-    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
-}
-
 export function buildCanonCharacterMessages({ name, canonName, digest, hints }) {
     const sys = `你是资深的角色设定编辑。根据《${canonName}》的原著梗概（以及你对这部作品的了解），为人物「${name}」写一份可直接用于即兴剧演员的人设卡：忠于原著，具体到口癖、习惯动作、价值观与底线，写出矛盾与执念；梗概里没写到的细节可凭你对原作的知识补全，但不要与梗概冲突。只输出一个 JSON 对象，不要代码块。字段：${SHEET_SCHEMA}\n${JSON_ONLY_RULE}`;
     const user = [
         `【原著梗概】\n${digest}`,
         hints ? `额外要求：${hints}` : '',
         `写「${name}」的人设卡。输出 JSON。`,
+    ].filter(Boolean).join('\n\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+
+// ---------- 原著：幕与剧情点 ----------
+
+export function buildChunkPointsMessages({ name, index, total, chunk, chapter }) {
+    const sys = `你是小说编辑，正在为《${name}》逐段提取"剧情点"。剧情点 = 推动故事的事实：谁做了什么、发生了什么、关系怎么变、揭示了什么设定、埋下什么伏笔。要求：按原文顺序；每条 15-40 字，写清人物与结果；不评论不抒情；只写这一段里发生的；4 到 10 条。只输出 JSON：{"points":["…"],"characters":["出场人物名"],"hooks":["这一段埋下或呼应的伏笔"]}。
+${JSON_ONLY_RULE}`;
+    const user = `【第 ${index}/${total} 段${chapter ? '（' + chapter + '）' : ''}】\n${chunk}\n\n输出 JSON。`;
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+export function buildSectionMessages({ name, index, total, chapters, points, hooks }) {
+    const sys = `你是小说编辑，要把《${name}》连续几段的剧情点合并成"一节"：去重、合并同一事件的碎片、按顺序保留全部关键事实，压成 8 到 16 条剧情点（每条 15-40 字）；起一个 6 到 14 字的节标题（像章回名，不剧透结局）；写一句 40 字内的概述。只输出 JSON：{"title":"…","summary":"…","points":["…"]}。
+${JSON_ONLY_RULE}`;
+    const user = [
+        chapters?.length ? `涉及章节：${chapters.join('、')}` : '',
+        `【第 ${index}/${total} 节的原始剧情点】\n${points.map((p, i) => `${i + 1}. ${p}`).join('\n')}`,
+        hooks?.length ? `【伏笔】\n${hooks.map(h => '- ' + h).join('\n')}` : '',
+        '输出 JSON。',
+    ].filter(Boolean).join('\n\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+export function buildActsGroupingMessages({ name, sections }) {
+    const sys = `你是剧本结构师。下面是《${name}》按顺序排列的各节概述，请把它们划分成若干"幕"：一幕 = 故事的一个阶段（新的目标、新的地点/势力、重大转折前后、时间跳跃处分幕）。要求：幕按顺序连续覆盖全部节，不重叠不遗漏；幕数在 ${Math.max(3, Math.min(30, Math.round(sections.length / 6)))} 左右（可上下浮动）；每幕给 6 到 14 字的标题（像卷名）和 60 字内的概述。只输出 JSON：{"acts":[{"title":"…","from":起始节号,"to":结束节号,"summary":"…"}]}，节号从 1 开始、含两端。
+${JSON_ONLY_RULE}`;
+    const user = `【各节】\n${sections.map(x => `${x.index}. 《${x.title}》${x.summary}${x.firstPoints?.length ? '（' + x.firstPoints.join('；') + '）' : ''}`).join('\n')}\n\n输出 JSON。`;
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+export function buildActCompressMessages({ name, title, points }) {
+    const sys = `你是小说编辑。把《${name}》第「${title}」幕的剧情点整理成不超过 30 条：合并重复、删掉无关紧要的过场，保留所有推动主线与人物关系的事实，保持时间顺序，每条 15-40 字；再写一句 60 字内的本幕概述。只输出 JSON：{"summary":"…","points":["…"]}。
+${JSON_ONLY_RULE}`;
+    return [{ role: 'system', content: sys }, { role: 'user', content: `【剧情点】\n${points.map((p, i) => `${i + 1}. ${p}`).join('\n')}\n\n输出 JSON。` }];
+}
+
+export function buildOverviewMessages({ name, acts, maxChars }) {
+    const sys = `你是小说编辑，要根据《${name}》的幕目写一份"原著概览"，供另一个 AI 判断同人故事的走向。用 Markdown，严格按以下小节输出，总长不超过 ${maxChars} 字：
+## 一句话概括
+## 主线梗概（按幕，每幕两三句）
+## 主要人物（名字：身份、性格与口吻、动机、与他人的关系、结局或去向）
+## 关键转折点（编号，每条一句：事件 → 后果）
+## 世界规则与设定
+## 伏笔与未解之谜
+## 原著的必然逻辑（哪些事在原著逻辑下"必然"发生，为什么）
+只写幕目里有依据的事实，不臆造。`;
+    const user = `【幕目】\n${acts.map(a => `第${a.index + 1}幕《${a.title}》：${a.summary}\n${(a.points || []).map(p => '- ' + p).join('\n')}`).join('\n\n')}\n\n输出概览。`;
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+export function buildKnowledgeCanonMessages({ name, hints, sources, maxChars }) {
+    const sys = `你是熟悉各类小说、动漫、游戏与影视作品的资深编辑，要为《${name}》整理一份供同人推演用的"原著资料"：一份概览 + 按阶段划分的幕目（每幕若干剧情点）。${sources ? '优先依据给定资料，资料没有的用你自己的知识补全；' : '凭你自己对这部作品的知识撰写；'}拿不准的地方标注"（不确定）"，不要编造。
+只输出 JSON：{"overview":"Markdown 概览，不超过 ${maxChars} 字，含小节：## 一句话概括 / ## 主线梗概 / ## 主要人物（性格与口吻） / ## 关键转折点 / ## 世界规则与设定 / ## 伏笔与未解之谜 / ## 原著的必然逻辑 / ## 同人常见 OOC 点","acts":[{"title":"幕标题（像卷名）","summary":"60 字内概述","points":["按顺序 6 到 15 条剧情点，每条 15-40 字"],"characters":["本幕主要人物"]}]}
+幕数按作品长度定（短篇 3-5 幕，长篇 8-20 幕），幕要按时间顺序连续覆盖全篇。
+${JSON_ONLY_RULE}`;
+    const user = [`作品：《${name}》`, hints ? `补充说明：${hints}` : '', sources ? `【资料】\n${sources}` : '', '输出 JSON。'].filter(Boolean).join('\n\n');
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+}
+
+export function buildLocateMessages({ canonName, actsBrief, floors, previous }) {
+    const sys = `你是剧情顾问。根据《${canonName}》的幕目与故事至今的记录，判断当前进行到原著的哪一幕（同人可能改动了细节，按"最近发生的事对应原著哪个阶段"判断；若故事已越过原著结局或完全脱离，选最接近的一幕并说明）。只输出 JSON：{"actIndex":幕号（从 1 开始）,"pointHint":"大约进行到本幕的哪个剧情点","reason":"40 字内依据","confidence":"高|中|低"}。
+${JSON_ONLY_RULE}`;
+    const user = [
+        `【幕目】\n${actsBrief}`,
+        previous ? `【上次判断】第${previous.actIndex + 1}幕（${previous.reason || ''}）` : '',
+        `【故事至今（最近记录）】\n${(floors || []).map(f => `${f.name}：${f.text.slice(0, 500)}`).join('\n\n') || '（故事尚未开始）'}`,
+        '输出 JSON。',
     ].filter(Boolean).join('\n\n');
     return [{ role: 'system', content: sys }, { role: 'user', content: user }];
 }

@@ -91,6 +91,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
         feedActors: true,     // 演员行动时也能看到走向
         chunkChars: 6000,
         digestMaxChars: 5000,
+        sectionChunks: 6,     // 每几段提要合成一节
+        parallel: 2,          // 逐段提要的并发数
         connectionId: '',     // 空 = 工坊连接
     },
     chronicler: {
@@ -102,7 +104,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
         fields: { mood: true, goal: true, bonds: true, chronicle: true, sheet: true, abilities: true, npcs: true },
         maxLog: 20,
     },
-    canons: [],               // 原著摘要 [{ id, name, sourceType, digest, chapters, chars, createdAt }]
+    canons: [],               // 原著索引 [{ id, name, sourceType, digest, chars, createdAt, hasDetail, actsCount, actTitles }]；幕与剧情点存 IndexedDB
     connections: [],
     actors: [],               // 演员库（模板，跨聊天复用）；每个聊天自己的演员在 chat_metadata 里
 });
@@ -111,6 +113,10 @@ let cachedContext = null;
 function ctx() {
     if (!cachedContext) cachedContext = SillyTavern.getContext();
     return cachedContext;
+}
+
+function isPlain(v) {
+    return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
 function deepMerge(base, patch) {
@@ -127,16 +133,39 @@ function deepMerge(base, patch) {
     return patch === undefined ? base : patch;
 }
 
+/** 就地补齐缺失的默认值：不替换对象，保证所有持有引用的地方看到同一份设置。 */
+function fillDefaults(target, defaults) {
+    for (const [k, dv] of Object.entries(defaults)) {
+        const tv = target[k];
+        if (tv === undefined || tv === null) { target[k] = structuredClone(dv); continue; }
+        if (isPlain(dv) && isPlain(tv)) fillDefaults(tv, dv);
+    }
+    return target;
+}
+
+const normalized = new WeakSet();
+
+/**
+ * 取设置对象。返回的永远是 extensionSettings[MODULE_NAME] 本身（同一引用），
+ * 缺失字段只在首次见到该对象时就地补齐。
+ */
 export function getSettings() {
     const { extensionSettings } = ctx();
-    if (!extensionSettings[MODULE_NAME]) {
-        extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
+    let s = extensionSettings[MODULE_NAME];
+    if (!isPlain(s)) {
+        s = structuredClone(DEFAULT_SETTINGS);
+        extensionSettings[MODULE_NAME] = s;
     }
-    const merged = deepMerge(structuredClone(DEFAULT_SETTINGS), extensionSettings[MODULE_NAME]);
-    merged.connections = (merged.connections || []).map(c => deepMerge(structuredClone(DEFAULT_CONNECTION), c));
-    merged.actors = (merged.actors || []).map(a => deepMerge(structuredClone(DEFAULT_ACTOR), a));
-    extensionSettings[MODULE_NAME] = merged;
-    return merged;
+    if (!normalized.has(s)) {
+        fillDefaults(s, DEFAULT_SETTINGS);
+        if (!Array.isArray(s.connections)) s.connections = [];
+        if (!Array.isArray(s.actors)) s.actors = [];
+        if (!Array.isArray(s.canons)) s.canons = [];
+        s.connections = s.connections.filter(isPlain).map(c => fillDefaults(c, DEFAULT_CONNECTION));
+        s.actors = s.actors.filter(isPlain).map(a => fillDefaults(a, DEFAULT_ACTOR));
+        normalized.add(s);
+    }
+    return s;
 }
 
 export function saveSettings() {
@@ -170,7 +199,7 @@ export function removeConnection(id) {
 }
 
 export function normalizeActor(actor) {
-    return deepMerge(structuredClone(DEFAULT_ACTOR), actor || {});
+    return fillDefaults(isPlain(actor) ? actor : {}, DEFAULT_ACTOR);
 }
 
 // ---------- 演员库（全局模板） ----------
@@ -224,7 +253,12 @@ export function importSettings(json) {
     const parsed = JSON.parse(json);
     if (!parsed || typeof parsed !== 'object') throw new Error('无效的设置文件');
     const { extensionSettings } = ctx();
-    extensionSettings[MODULE_NAME] = deepMerge(structuredClone(DEFAULT_SETTINGS), parsed);
+    const merged = deepMerge(structuredClone(DEFAULT_SETTINGS), parsed);
+    const current = getSettings();
+    // 就地替换内容，保持对象引用不变
+    for (const k of Object.keys(current)) delete current[k];
+    Object.assign(current, merged);
+    normalized.delete(current);
     saveSettings();
     return getSettings();
 }

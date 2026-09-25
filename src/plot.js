@@ -1,11 +1,17 @@
 // 剧情罗盘：原著（世界书条目 / TXT 小说 / 手写梗概）→ 摘要 → 走向推演 → 注入正文提示词。
 
-import { getSettings, getCanon, upsertCanon, removeCanon, uid, getConnection } from './settings.js';
+import { getSettings, getCanon, upsertCanon, uid, getConnection } from './settings.js';
 import { getState, getPlot, saveState, LIMITS, activeActors, getActorState } from './state.js';
 import { resolveConnection, sendChat } from './connections.js';
 import { collectStage } from './stage.js';
-import { buildChunkSummaryMessages, buildDigestMessages, buildMergeSummariesMessages, buildCompassMessages } from './prompts.js';
-import { extractJson, stripThinking, describeError, requestJson } from './llm.js';
+import { buildCompassMessages } from './prompts.js';
+import { describeError, requestJson } from './llm.js';
+import {
+    buildCanonFromText, buildCanonFromKnowledge, structureActs, deleteCanon as destroyCanon,
+    loadCanonDetail, locateAct, canonPositionText,
+} from './canon.js';
+
+export { splitChunks, loadCanonDetail, saveCanonDetail, exportCanon, importCanon, actsBrief } from './canon.js';
 
 const INJECT_KEY = 'PERSONA_ARENA_PLOT';
 const listeners = new Set();
@@ -99,76 +105,16 @@ export async function loadLoreEntries(book) {
         .sort((a, b) => (a.order - b.order) || (a.uid - b.uid));
 }
 
-export function splitChunks(text, size) {
-    const paras = String(text || '').replace(/\r\n?/g, '\n').split(/\n{2,}|\n(?=\s*(第[一二三四五六七八九十百千0-9]+[章节回卷]|Chapter\s+\d+))/i).filter(Boolean);
-    const chunks = [];
-    let cur = '';
-    for (const p of paras) {
-        if (p.length > size) {
-            if (cur) { chunks.push(cur); cur = ''; }
-            for (let i = 0; i < p.length; i += size) chunks.push(p.slice(i, i + size));
-            continue;
-        }
-        if ((cur + '\n\n' + p).length > size && cur) { chunks.push(cur); cur = p; }
-        else cur = cur ? cur + '\n\n' + p : p;
-    }
-    if (cur) chunks.push(cur);
-    return chunks;
-}
-
-async function llm(messages, { maxTokens, temperature, signal }) {
-    const conn = { ...plotConnection(), stream: false };
-    const { content } = await sendChat(conn, messages, { maxTokens, temperature, signal, task: 'tool' });
-    return stripThinking(content).trim();
-}
-
-/** 把长文本（TXT 或世界书拼接）逐段提要再汇总成原著梗概。 */
-export async function summarizeText({ name, text, sourceType = 'txt', onProgress, signal }) {
+/** 忙碌保护 + 中止控制，包住耗时的原著任务。 */
+async function guarded(kind, fn, signal) {
     if (busy) throw new Error('剧情模块正忙');
-    busy = 'summarize';
+    busy = kind;
     controller = new AbortController();
     const sig = signal || controller.signal;
-    const s = getSettings();
     try {
-        const clean = String(text || '').trim();
-        if (!clean) throw new Error('没有内容可总结');
-        const chunks = splitChunks(clean, Math.max(1500, Number(s.plot.chunkChars) || 6000));
-        const summaries = [];
-        for (let i = 0; i < chunks.length; i++) {
-            if (sig.aborted) throw new Error('已中止');
-            onProgress?.(`正在提要第 ${i + 1}/${chunks.length} 段…`);
-            summaries.push(await llm(buildChunkSummaryMessages({ name, index: i + 1, total: chunks.length, chunk: chunks[i], prevSummary: summaries[i - 1] || '' }), { maxTokens: 900, temperature: 0.3, signal: sig }));
-            emit({ progress: (i + 1) / chunks.length });
-        }
-        let merged = summaries;
-        // 提要太长就分批压缩
-        while (merged.join('\n\n').length > 14000) {
-            const batches = [];
-            let cur = [];
-            for (const m of merged) {
-                if ((cur.join('\n\n') + m).length > 9000 && cur.length) { batches.push(cur); cur = []; }
-                cur.push(m);
-            }
-            if (cur.length) batches.push(cur);
-            const next = [];
-            for (let i = 0; i < batches.length; i++) {
-                if (sig.aborted) throw new Error('已中止');
-                onProgress?.(`正在压缩第 ${i + 1}/${batches.length} 批提要…`);
-                next.push(await llm(buildMergeSummariesMessages({ name, part: i + 1, total: batches.length, summaries: batches[i].join('\n\n') }), { maxTokens: 1500, temperature: 0.3, signal: sig }));
-            }
-            if (next.length >= merged.length) break;
-            merged = next;
-        }
-        onProgress?.('正在汇总原著梗概…');
-        const digest = await llm(buildDigestMessages({ name, summaries: merged.join('\n\n'), maxChars: Number(s.plot.digestMaxChars) || 5000 }), { maxTokens: 2600, temperature: 0.3, signal: sig });
-        const chapters = summaries.join('\n').length <= 20000 ? summaries.map((sm, i) => ({ index: i + 1, summary: sm })) : [];
-        const canon = upsertCanon({ id: uid('canon'), name, sourceType, digest, chapters, chars: clean.length, chunks: chunks.length, createdAt: Date.now() });
-        try {
-            const { localforage } = SillyTavern.libs || {};
-            if (localforage) await localforage.setItem(`persona-arena_canon_${canon.id}`, clean);
-        } catch { /* 忽略 */ }
-        emit({ canon });
-        return canon;
+        const result = await fn(sig);
+        emit(result?.id ? { canon: result } : {});
+        return result;
     } finally {
         busy = '';
         controller = null;
@@ -176,7 +122,12 @@ export async function summarizeText({ name, text, sourceType = 'txt', onProgress
     }
 }
 
-/** 从世界书条目建原著：短则直接用原文，长则走摘要。 */
+/** 长文本（TXT / 世界书拼接）→ 幕与剧情点 → 概览。返回原著索引。 */
+export function summarizeText({ name, text, sourceType = 'txt', onProgress, signal }) {
+    return guarded('summarize', (sig) => buildCanonFromText({ name, text, sourceType, onProgress, signal: sig }), signal);
+}
+
+/** 从世界书条目建原著：短则直接用原文，长则走分幕总结。 */
 export async function canonFromLore({ book, uids, name, onProgress, signal }) {
     const entries = (await loadLoreEntries(book)).filter(e => uids.includes(e.uid));
     if (!entries.length) throw new Error('没有选中任何条目');
@@ -192,48 +143,16 @@ export async function canonFromLore({ book, uids, name, onProgress, signal }) {
     return canon;
 }
 
-/** 同人：按作品名，联网搜索（可选）后凭模型知识写原著梗概。 */
-export async function canonFromKnowledge({ name, hints, useSearch, onProgress, signal }) {
-    if (busy) throw new Error('剧情模块正忙');
-    busy = 'summarize';
-    controller = new AbortController();
-    const sig = signal || controller.signal;
-    try {
-        let digestSource = '';
-        let provider = '';
-        if (useSearch) {
-            onProgress?.('正在联网搜索原著资料…');
-            try {
-                const { webSearch, readPage, searchDigest } = await import('./search.js');
-                const queries = [`${name} 剧情 梗概`, `${name} 人物 关系 结局`];
-                const seen = new Set();
-                const results = [];
-                for (const q of queries) {
-                    if (sig.aborted) throw new Error('已中止');
-                    const r = await webSearch(q);
-                    provider = r.provider;
-                    for (const x of r.results) if (x.url && !seen.has(x.url)) { seen.add(x.url); results.push(x); }
-                }
-                digestSource = searchDigest(results.slice(0, 8), 3500);
-                const best = results.find(r => /wiki|百科|fandom|moegirl|萌娘/i.test(r.url)) || results[0];
-                if (best?.url) { try { digestSource += '\n\n【正文摘录：' + best.url + '】\n' + await readPage(best.url, 3500); } catch { /* 忽略 */ } }
-            } catch (err) {
-                onProgress?.(`搜索失败（${err.message}），改为凭模型知识撰写…`);
-            }
-        }
-        onProgress?.('正在撰写原著梗概…');
-        const { buildCanonFromKnowledgeMessages } = await import('./prompts.js');
-        const s = getSettings();
-        const digest = await llm(buildCanonFromKnowledgeMessages({ name, hints, sources: digestSource, maxChars: Number(s.plot.digestMaxChars) || 5000 }), { maxTokens: 2600, temperature: 0.4, signal: sig });
-        if (!digest || digest.length < 80) throw new Error('模型没有写出可用的梗概');
-        const canon = upsertCanon({ id: uid('canon'), name, sourceType: 'knowledge', digest, chapters: [], chars: digest.length, chunks: 0, createdAt: Date.now(), searched: !!digestSource, provider });
-        emit({ canon });
-        return canon;
-    } finally {
-        busy = '';
-        controller = null;
-        emit({});
-    }
+/** 同人：按作品名，联网搜索（可选）后凭模型知识写概览与幕目。 */
+export function canonFromKnowledge({ name, hints, useSearch, onProgress, signal }) {
+    return guarded('summarize', (sig) => buildCanonFromKnowledge({ name, hints, useSearch, onProgress, signal: sig }), signal);
+}
+
+/** 只有梗概没有幕目的原著（手写 / 世界书短文 / 旧版）：自动分幕。 */
+export function structureCanon({ canonId, onProgress, signal }) {
+    const canon = getCanon(canonId);
+    if (!canon) throw new Error('原著不存在');
+    return guarded('summarize', async (sig) => { await structureActs({ canon, onProgress, signal: sig }); return canon; }, signal);
 }
 
 export function canonFromText({ name, digest }) {
@@ -243,10 +162,9 @@ export function canonFromText({ name, digest }) {
 }
 
 export async function deleteCanon(id) {
-    removeCanon(id);
-    try { const { localforage } = SillyTavern.libs || {}; if (localforage) await localforage.removeItem(`persona-arena_canon_${id}`); } catch { /* 忽略 */ }
+    await destroyCanon(id);
     const st = getState();
-    if (st.plot.canonId === id) { st.plot.canonId = ''; saveState(); }
+    if (st.plot.canonId === id) { st.plot.canonId = ''; st.plot.located = null; st.plot.actOverride = -1; saveState(); }
     emit({});
 }
 
@@ -350,6 +268,43 @@ export function applyInjection() {
     try { c.setExtensionPrompt(INJECT_KEY, text, 1 /* IN_CHAT */, depth, false, role); } catch (err) { console.warn('[PersonaArena] inject failed', err); }
 }
 
+/** 判断当前处于原著哪一幕（手动指定优先），把结果记在 plot.located 并返回给罗盘用的位置文本。 */
+async function locateForCompass({ canon, plot, stage, sig, onProgress }) {
+    const detail = await loadCanonDetail(canon.id);
+    if (!detail?.acts?.length) return '';
+    const override = Number(plot.actOverride);
+    let located;
+    if (Number.isInteger(override) && override >= 0 && override < detail.acts.length) {
+        located = { actIndex: override, reason: '导演手动指定', confidence: '高', pointHint: '', manual: true };
+    } else {
+        onProgress?.('正在判断进行到原著哪一幕…');
+        try {
+            located = await locateAct({ canon, detail, stage, previous: plot.located && plot.located.canonId === canon.id ? plot.located : null, signal: sig });
+        } catch (err) {
+            console.warn('[PersonaArena] locate act failed', err);
+            located = plot.located && plot.located.canonId === canon.id ? { ...plot.located, reason: '沿用上次判断（本次定位失败）' } : { actIndex: 0, reason: '定位失败，暂按第一幕', confidence: '低', pointHint: '' };
+        }
+    }
+    plot.located = { ...located, canonId: canon.id, actsCount: detail.acts.length, title: detail.acts[located.actIndex]?.title || '', at: Date.now(), floor: (ctx().chat || []).length };
+    saveState();
+    emit({ located: plot.located });
+    return canonPositionText(detail, located.actIndex, located);
+}
+
+/** 只重新定位，不推演。 */
+export function locateNow({ onProgress, signal } = {}) {
+    return guarded('locate', async (sig) => {
+        const s = getSettings();
+        const plot = getPlot();
+        const canon = plot.canonId ? getCanon(plot.canonId) : null;
+        if (!canon) throw new Error('先选择一本原著');
+        const stage = await collectStage({ ...s, contextFloors: Math.max(1, Number(s.plot.contextFloors) || 12), includeWorldInfo: false });
+        const text = await locateForCompass({ canon, plot, stage, sig, onProgress });
+        if (!text) throw new Error('这本原著还没有幕目，先点「自动分幕」');
+        return plot.located;
+    }, signal);
+}
+
 export async function generateCompass({ onProgress, signal } = {}) {
     if (busy) throw new Error('剧情模块正忙');
     busy = 'compass';
@@ -372,9 +327,10 @@ export async function generateCompass({ onProgress, signal } = {}) {
         }
         if (!loreText && stage.loreText) loreText = stage.loreText.slice(0, 4000);
         const npcs = st.npcs || [];
+        const canonPosition = canon ? await locateForCompass({ canon, plot, stage, sig, onProgress }) : '';
         onProgress?.('正在推演走向…');
         const messages = buildCompassMessages({
-            canonName: canon?.name, canonDigest: canon?.digest || '', loreText, stage,
+            canonName: canon?.name, canonDigest: canon?.digest || '', canonPosition, loreText, stage,
             notes: plot.notes, previous: plot.compass ? compassToText(plot.compass, { brief: true }) : '',
             actorsBrief: actorsBrief(), npcsBrief: npcs.map(n => `- ${n.name}${n.role ? '（' + n.role + '）' : ''}`).join('\n'),
         });
